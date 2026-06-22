@@ -311,6 +311,12 @@
   function saveRecentSent() { localStorage.setItem('byecar_recentSent', JSON.stringify(recentSent)); }
 
   function renderStrip() {
+    // Drop entries whose real ID is no longer in the server queue (departed/cleared)
+    recentSent = recentSent.filter(function (item) {
+      if (item.id.indexOf('tmp_') === 0) return true; // still sending, keep
+      return !!lastQueue.find(function (q) { return q.id === item.id; });
+    });
+    saveRecentSent();
     if (!recentSent.length) { statusStrip.innerHTML = ''; return; }
     var n = recentSent.length;
     statusStrip.innerHTML = recentSent.map(function (item, i) {
@@ -576,6 +582,7 @@
   ==================================================================== */
   var doorListEl = document.getElementById('doorList');
   var doorPending = {}; // id -> timeout handle
+  var doorKnownStatuses = {}; // id -> last seen status, for detecting enroute transitions
 
   function renderDoor(queue) {
     var active = activeQueue(queue);
@@ -602,7 +609,6 @@
       return;
     }
 
-    playChime();
     doorPending[id] = setTimeout(function () {
       delete doorPending[id];
       postDeparted(id);
@@ -628,6 +634,16 @@
         setOnline(true);
         var queue = data.queue || [];
         if (mode === 'cafeteria') handleNewCalls(queue);
+        if (mode === 'door') {
+          // Chime when a student transitions to En Route (cafeteria just tapped them)
+          queue.forEach(function (item) {
+            var prev = doorKnownStatuses[item.id];
+            if (item.status === 'enroute' && prev && prev !== 'enroute') {
+              playChime();
+            }
+            doorKnownStatuses[item.id] = item.status;
+          });
+        }
         lastQueue = queue;
         localStorage.setItem('byecar_lastQueue', JSON.stringify(lastQueue));
         if (mode === 'cafeteria') renderBoard(lastQueue);
