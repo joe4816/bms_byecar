@@ -162,6 +162,7 @@
   </div>
   <div class="header-right">
     <span class="pending-note" id="pendingNote"></span>
+    <button id="resetBtn" title="Reset system" style="background:rgba(255,255,255,0.15);border:none;color:#fff;border-radius:8px;padding:7px 11px;font-size:13px;font-weight:700;">↺ Reset</button>
     <div class="dot" id="connDot"></div>
   </div>
 </header>
@@ -193,6 +194,19 @@
 <!-- ===== DOOR VIEW ===== -->
 <div class="view" id="view-door">
   <div id="doorList"></div>
+</div>
+
+<!-- ===== RESET CONFIRMATION MODAL ===== -->
+<div id="resetOverlay" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.55); z-index:100; align-items:center; justify-content:center;">
+  <div style="background:#fff; border-radius:18px; padding:28px 24px; max-width:320px; width:90%; text-align:center; box-shadow:0 8px 32px rgba(0,0,0,0.25);">
+    <div style="font-size:36px; margin-bottom:12px;">⚠️</div>
+    <p style="font-size:18px; font-weight:800; color:var(--text); margin:0 0 8px;">Reset the system?</p>
+    <p style="font-size:14px; color:var(--muted); margin:0 0 24px;">This clears all screens on all devices. The pickup log in the sheet is not affected.</p>
+    <div style="display:flex; gap:10px;">
+      <button id="resetCancel" style="flex:1; padding:14px; border-radius:10px; border:2px solid var(--line); background:#fff; font-size:15px; font-weight:700; color:var(--text);">Cancel</button>
+      <button id="resetConfirm" style="flex:1; padding:14px; border-radius:10px; border:none; background:var(--danger); color:#fff; font-size:15px; font-weight:700;">Yes, Reset</button>
+    </div>
+  </div>
 </div>
 
 <div class="toast" id="toast"></div>
@@ -652,6 +666,3685 @@
       })
       .catch(function () { setOnline(false); });
   }
+
+  /* ====================================================================
+     RESET
+  ==================================================================== */
+  var resetOverlay = document.getElementById('resetOverlay');
+  document.getElementById('resetBtn').addEventListener('click', function () {
+    resetOverlay.style.display = 'flex';
+  });
+  document.getElementById('resetCancel').addEventListener('click', function () {
+    resetOverlay.style.display = 'none';
+  });
+  document.getElementById('resetConfirm').addEventListener('click', function () {
+    resetOverlay.style.display = 'none';
+    // Clear all local state
+    localStorage.removeItem('byecar_lastQueue');
+    localStorage.removeItem('byecar_recentSent');
+    localStorage.removeItem('byecar_pending');
+    localStorage.removeItem('byecar_announced');
+    recentSent = [];
+    pendingSends = [];
+    announcedIds = [];
+    flashingIds = {};
+    announceQueue = [];
+    announcing = false;
+    doorPending = {};
+    doorKnownStatuses = {};
+    lastQueue = [];
+    // Tell the server to wipe the queue too
+    fetch(APPS_SCRIPT_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({ action: 'reset' })
+    }).then(function () {
+      setOnline(true);
+      renderStrip();
+      renderBoard([]);
+      renderDoor([]);
+      refreshPendingNote();
+      toast('System reset ✓');
+    }).catch(function () {
+      setOnline(false);
+      toast('Reset sent — reconnecting...');
+    });
+  });
+
+  /* ====================================================================
+     INIT
+  ==================================================================== */
+  applyMode();
+  renderResults();
+  refreshPendingNote();
+  loadRoster();
+  poll();
+  setInterval(poll, POLL_MS);
+  setInterval(flushPending, 5000);
+  window.addEventListener('online', flushPending);
+</script>
+
+</body>
+</html><!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>BMS Bye Car</title>
+<style>
+  :root {
+    --purple: #3F2167;
+    --purple-light: #6B46B0;
+    --gold: #C9A66B;
+    --cream: #FAF7F0;
+    --text: #241734;
+    --muted: #8B7FA3;
+    --muted-light: #B7ACCB;
+    --called: #E5483D;
+    --called-glow: #FF8A65;
+    --enroute: #F2B807;
+    --pending: #8B7FA3;
+    --ok: #3C9D5C;
+    --danger: #C0392B;
+    --line: #E3DCEF;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body {
+    margin: 0; padding: 0; height: 100%; width: 100%;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: var(--cream); color: var(--text);
+    overscroll-behavior: none;
+  }
+  body { display: flex; flex-direction: column; height: 100vh; min-height: 0; }
+
+  header {
+    background: var(--purple); color: #fff;
+    padding: 12px 16px; flex: 0 0 auto;
+    display: flex; align-items: center; justify-content: space-between;
+    flex-wrap: wrap; row-gap: 8px;
+  }
+  header h1 { margin: 0; font-size: 18px; font-weight: 800; letter-spacing: .3px; }
+  .mode-switch { display: flex; gap: 6px; }
+  .mode-switch button {
+    background: rgba(255,255,255,0.15); color: #fff; border: none;
+    padding: 8px 12px; border-radius: 8px; font-size: 13px; font-weight: 700;
+  }
+  .mode-switch button.active { background: var(--gold); color: var(--purple); }
+  .header-right { display: flex; align-items: center; gap: 12px; }
+  .dot { width: 11px; height: 11px; border-radius: 50%; background: var(--ok); flex: 0 0 auto; }
+  .dot.offline { background: var(--danger); }
+  .pending-note { font-size: 11px; color: var(--gold); }
+
+  .view { display: none; flex: 1; min-height: 0; flex-direction: column; }
+  .view.active { display: flex; }
+
+  /* ---------- Car view ---------- */
+  .status-strip { flex: 0 0 auto; padding: 10px 16px 0; display: flex; flex-direction: column; gap: 6px; }
+  .status-row {
+    display: flex; align-items: center; gap: 10px; background: #fff;
+    border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px;
+  }
+  .status-row .num {
+    width: 22px; height: 22px; border-radius: 50%; background: var(--purple);
+    color: #fff; font-size: 12px; font-weight: 800; display: flex; align-items: center; justify-content: center;
+    flex: 0 0 auto;
+  }
+  .status-row .name { flex: 1; font-weight: 600; font-size: 15px; }
+  .status-row .state { font-size: 12px; font-weight: 700; }
+  .status-row .state.sending { color: var(--muted); }
+  .status-row .state.called { color: var(--ok); }
+
+  .search-wrap { padding: 10px 16px; flex: 0 0 auto; display: flex; gap: 8px; }
+  #search {
+    flex: 1; min-width: 0; padding: 14px 16px; font-size: 18px; border-radius: 12px;
+    border: 2px solid var(--line); outline: none; background: #fff; color: var(--text);
+  }
+  #search:focus { border-color: var(--purple-light); }
+  #carMain { flex: 1; min-height: 0; overflow-y: auto; padding: 0 16px 16px; }
+  .hint { color: var(--muted); font-size: 14px; text-align: center; margin-top: 24px; }
+
+  .result-row {
+    display: flex; align-items: center; gap: 12px;
+    background: #fff; border: 1px solid var(--line); border-radius: 12px;
+    padding: 12px 14px; margin-bottom: 8px;
+  }
+  .result-row.flash { animation: sentFlash .5s ease; }
+  @keyframes sentFlash { 0% { background:#fff; } 40% { background:#DDF3E2; } 100% { background:#fff; } }
+
+  .checkbox {
+    width: 26px; height: 26px; border-radius: 8px; border: 2px solid var(--purple-light);
+    flex: 0 0 auto; display: flex; align-items: center; justify-content: center;
+    color: #fff; font-size: 16px; background: #fff;
+  }
+  .checkbox.checked { background: var(--purple-light); }
+
+  .name-area { flex: 1; min-height: 0; }
+  .name-area .full { font-size: 17px; font-weight: 600; }
+  .name-area .grade { font-size: 12px; color: var(--muted); }
+
+  .send-now {
+    flex: 0 0 auto; background: var(--purple); color: #fff; border: none;
+    border-radius: 10px; padding: 10px 14px; font-size: 14px; font-weight: 600;
+  }
+
+  .more-matches { text-align: center; color: var(--muted); font-size: 13px; padding: 8px 0; }
+
+  .no-match-link {
+    display: block; width: 100%; text-align: center; background: #fff;
+    border: 2px dashed var(--purple-light); color: var(--purple); border-radius: 12px;
+    padding: 16px; font-size: 15px; font-weight: 600; margin-top: 8px;
+  }
+
+  .batch-bar {
+    flex: 0 0 auto; background: var(--purple); color: #fff; padding: 12px 16px;
+    display: none; align-items: center; justify-content: space-between;
+  }
+  .batch-bar.show { display: flex; }
+  .batch-bar button {
+    background: var(--gold); color: var(--purple); border: none; border-radius: 10px;
+    padding: 10px 18px; font-weight: 700; font-size: 15px;
+  }
+
+  .toast {
+    position: fixed; top: 64px; left: 50%; transform: translateX(-50%);
+    background: var(--purple); color: #fff; padding: 10px 18px; border-radius: 999px;
+    font-size: 14px; z-index: 50; opacity: 0; transition: opacity .25s;
+    pointer-events: none; max-width: 90%; text-align: center;
+  }
+  .toast.show { opacity: 1; }
+
+  /* ---------- Cafeteria view (2-column locked board) ---------- */
+  .cafe-bar { flex: 0 0 auto; padding: 8px 24px 0; display: flex; justify-content: flex-end; color: var(--muted); font-size: 14px; }
+  .board { flex: 1; min-height: 0; display: flex; gap: 18px; padding: 12px 24px 18px; }
+  .column { flex: 1; min-height: 0; display: flex; flex-direction: column; background: rgba(255,255,255,0.5); border-radius: 18px; padding: 14px; border: 2px solid rgba(255,255,255,0.6); }
+  .cards { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
+  .card { border-radius: 14px; padding: 14px 18px; font-size: 22px; font-weight: 700; color: #fff; display: flex; align-items: center; gap: 14px; box-shadow: 0 2px 6px rgba(0,0,0,0.12); }
+  .card .slot-badge { width: 34px; height: 34px; border-radius: 50%; background: rgba(255,255,255,0.3); display: flex; align-items: center; justify-content: center; font-size: 16px; flex: 0 0 auto; }
+  .card.called { background: var(--called); cursor: pointer; }
+  .card.called.flashing { animation: pulse 0.9s infinite; }
+  @keyframes pulse { 0%, 100% { background: var(--called); transform: scale(1); } 50% { background: var(--called-glow); transform: scale(1.03); } }
+  .card.enroute { background: var(--enroute); color: #4a3900; }
+  .empty-hint { color: var(--muted-light); text-align: center; font-size: 16px; margin-top: 20px; }
+
+  /* ---------- Door view (single locked list) ---------- */
+  #doorList { flex: 1; min-height: 0; overflow-y: auto; padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
+  .door-card { border-radius: 14px; padding: 16px 18px; font-size: 20px; font-weight: 700; color: #fff; display: flex; align-items: center; gap: 14px; box-shadow: 0 2px 6px rgba(0,0,0,0.12); }
+  .door-card .slot-badge { width: 32px; height: 32px; border-radius: 50%; background: rgba(255,255,255,0.3); display: flex; align-items: center; justify-content: center; font-size: 15px; flex: 0 0 auto; }
+  .door-card .info { flex: 1; }
+  .door-card .tag { font-size: 12px; font-weight: 600; opacity: .85; text-transform: uppercase; letter-spacing: .4px; display: block; margin-top: 2px; }
+  .door-card.called { background: var(--called); }
+  .door-card.enroute { background: var(--enroute); color: #4a3900; }
+  .door-card.pending { background: var(--pending); }
+  .door-card.pending .tag { opacity: 1; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Bye Car</h1>
+  <div class="mode-switch" id="modeSwitch">
+    <button data-mode="car">📱 Car</button>
+    <button data-mode="cafeteria">🖥️ Cafeteria</button>
+    <button data-mode="door">🚪 Door</button>
+  </div>
+  <div class="header-right">
+    <span class="pending-note" id="pendingNote"></span>
+    <button id="resetBtn" title="Reset system" style="background:rgba(255,255,255,0.15);border:none;color:#fff;border-radius:8px;padding:7px 11px;font-size:13px;font-weight:700;">↺ Reset</button>
+    <div class="dot" id="connDot"></div>
+  </div>
+</header>
+
+<!-- ===== CAR VIEW ===== -->
+<div class="view" id="view-car">
+  <div class="status-strip" id="statusStrip"></div>
+  <div class="search-wrap">
+    <input id="search" type="text" placeholder="Type a name..." autocomplete="off" autocapitalize="words">
+  </div>
+  <div id="carMain">
+    <div id="resultsContainer"></div>
+  </div>
+  <div class="batch-bar" id="batchBar">
+    <span id="batchCount">0 selected</span>
+    <button id="batchSend">Send Group</button>
+  </div>
+</div>
+
+<!-- ===== CAFETERIA VIEW ===== -->
+<div class="view" id="view-cafeteria">
+  <div class="cafe-bar"><span id="dateLabel"></span></div>
+  <div class="board">
+    <div class="column"><div class="cards" id="leftCards"></div></div>
+    <div class="column"><div class="cards" id="rightCards"></div></div>
+  </div>
+</div>
+
+<!-- ===== DOOR VIEW ===== -->
+<div class="view" id="view-door">
+  <div id="doorList"></div>
+</div>
+
+<!-- ===== RESET CONFIRMATION MODAL ===== -->
+<div id="resetOverlay" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.55); z-index:100; align-items:center; justify-content:center;">
+  <div style="background:#fff; border-radius:18px; padding:28px 24px; max-width:320px; width:90%; text-align:center; box-shadow:0 8px 32px rgba(0,0,0,0.25);">
+    <div style="font-size:36px; margin-bottom:12px;">⚠️</div>
+    <p style="font-size:18px; font-weight:800; color:var(--text); margin:0 0 8px;">Reset the system?</p>
+    <p style="font-size:14px; color:var(--muted); margin:0 0 24px;">This clears all screens on all devices. The pickup log in the sheet is not affected.</p>
+    <div style="display:flex; gap:10px;">
+      <button id="resetCancel" style="flex:1; padding:14px; border-radius:10px; border:2px solid var(--line); background:#fff; font-size:15px; font-weight:700; color:var(--text);">Cancel</button>
+      <button id="resetConfirm" style="flex:1; padding:14px; border-radius:10px; border:none; background:var(--danger); color:#fff; font-size:15px; font-weight:700;">Yes, Reset</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+  var APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbwv5EzBzqiEVIs3lkphhu42KdEab6YSY8Ff1NOHcBpQzM1i5gvd6RUV-k2z6FvAmoOe/exec';
+  var POLL_MS = 3000;
+  var FLASH_MS = 8000;
+  var DOOR_UNDO_MS = 7000;
+
+  var mode = localStorage.getItem('byecar_mode') || 'car';
+  var lastQueue = JSON.parse(localStorage.getItem('byecar_lastQueue') || '[]');
+
+  function escapeHtml(s) {
+    return (s || '').replace(/[&<>"']/g, function (c) {
+      return { '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c];
+    });
+  }
+  function formatTime(ts) {
+    var t = new Date(ts);
+    var hh = t.getHours(), mm = t.getMinutes();
+    var ampm = hh >= 12 ? 'PM' : 'AM';
+    hh = hh % 12; if (hh === 0) hh = 12;
+    var mmStr = mm < 10 ? '0' + mm : mm;
+    return hh + ':' + mmStr + ' ' + ampm;
+  }
+  function setOnline(isOnline) {
+    document.getElementById('connDot').classList.toggle('offline', !isOnline);
+  }
+  function toast(msg) {
+    var t = document.getElementById('toast');
+    t.textContent = msg;
+    t.classList.add('show');
+    setTimeout(function () { t.classList.remove('show'); }, 1600);
+  }
+
+  /* ---------- Shared chime (Web Audio, original two-note tone) ---------- */
+  var audioCtx = null;
+  function getAudioCtx() {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    return audioCtx;
+  }
+  function tone(ctx, freq, startTime, duration) {
+    var osc = ctx.createOscillator();
+    var gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.value = freq;
+    gain.gain.setValueAtTime(0.0001, startTime);
+    gain.gain.exponentialRampToValueAtTime(0.35, startTime + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, startTime + duration);
+    osc.connect(gain); gain.connect(ctx.destination);
+    osc.start(startTime); osc.stop(startTime + duration + 0.02);
+  }
+  function playChime() {
+    var ctx = getAudioCtx();
+    var now = ctx.currentTime;
+    [0, 0.097].forEach(function(offset) {
+      tone(ctx, 660, now + offset, 0.1);
+      tone(ctx, 880, now + offset + 0.1, 0.1);
+      tone(ctx, 1100, now + offset + 0.2, 0.16);
+    });
+  }
+  function speak(text) {
+    if (!window.speechSynthesis) return;
+    var u = new SpeechSynthesisUtterance(text);
+    u.rate = 0.95;
+    window.speechSynthesis.speak(u);
+  }
+
+  /* ====================================================================
+     MODE SWITCHING
+  ==================================================================== */
+  function applyMode() {
+    document.querySelectorAll('.view').forEach(function (v) { v.classList.remove('active'); });
+    document.getElementById('view-' + mode).classList.add('active');
+    document.querySelectorAll('#modeSwitch button').forEach(function (b) {
+      b.classList.toggle('active', b.getAttribute('data-mode') === mode);
+    });
+    localStorage.setItem('byecar_mode', mode);
+    if (mode === 'cafeteria') renderBoard(lastQueue);
+    if (mode === 'door') renderDoor(lastQueue);
+    if (mode === 'car') { renderStrip(); searchInput.focus(); }
+  }
+
+  document.getElementById('modeSwitch').addEventListener('click', function (e) {
+    var btn = e.target.closest('button');
+    if (!btn) return;
+    mode = btn.getAttribute('data-mode');
+    applyMode();
+    poll();
+  });
+
+  /* ====================================================================
+     CAR VIEW
+  ==================================================================== */
+  var roster = [];
+  var selected = {};
+  var pendingSends = JSON.parse(localStorage.getItem('byecar_pending') || '[]');
+  var recentSent = JSON.parse(localStorage.getItem('byecar_recentSent') || '[]'); // [{id, full, sentAt}]
+
+  var searchInput = document.getElementById('search');
+  var resultsContainer = document.getElementById('resultsContainer');
+  var batchBar = document.getElementById('batchBar');
+  var batchCount = document.getElementById('batchCount');
+  var pendingNote = document.getElementById('pendingNote');
+  var statusStrip = document.getElementById('statusStrip');
+
+  function refreshPendingNote() {
+    pendingNote.textContent = pendingSends.length ? pendingSends.length + ' waiting to send...' : '';
+  }
+  function savePending() {
+    localStorage.setItem('byecar_pending', JSON.stringify(pendingSends));
+    refreshPendingNote();
+  }
+  function saveRecentSent() { localStorage.setItem('byecar_recentSent', JSON.stringify(recentSent)); }
+
+  function renderStrip() {
+    // Drop entries whose real ID is no longer in the server queue (departed/cleared)
+    recentSent = recentSent.filter(function (item) {
+      if (item.id.indexOf('tmp_') === 0) return true; // still sending, keep
+      return !!lastQueue.find(function (q) { return q.id === item.id; });
+    });
+    saveRecentSent();
+    if (!recentSent.length) { statusStrip.innerHTML = ''; return; }
+    var n = recentSent.length;
+    statusStrip.innerHTML = recentSent.map(function (item, i) {
+      var label = n - i;
+      var live = lastQueue.find(function (q) { return q.id === item.id; });
+      var announced = live && live.announcedAt;
+      var stateHtml = announced
+        ? '<span class="state called">Called ' + formatTime(live.announcedAt) + '</span>'
+        : '<span class="state sending">Sending...</span>';
+      return '<div class="status-row"><div class="num">' + label + '</div>' +
+        '<div class="name">' + escapeHtml(item.full) + '</div>' + stateHtml + '</div>';
+    }).join('');
+  }
+
+  function genTempId() { return 'tmp_' + Math.random().toString(36).slice(2) + Date.now(); }
+
+  function loadRoster() {
+    var cached = localStorage.getItem('byecar_roster');
+    if (cached) { try { roster = JSON.parse(cached); } catch (e) { roster = []; } }
+    fetch(APPS_SCRIPT_URL + '?action=roster')
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        roster = data.roster || [];
+        localStorage.setItem('byecar_roster', JSON.stringify(roster));
+        setOnline(true);
+      })
+      .catch(function () { setOnline(false); });
+  }
+
+  function matchesQuery(student, q) {
+    var hay = (student.first + ' ' + student.last + ' ' + student.full).toLowerCase();
+    return hay.indexOf(q) !== -1;
+  }
+
+  function renderResults() {
+    var raw = searchInput.value.trim();
+    var q = raw.toLowerCase();
+    if (!q) { resultsContainer.innerHTML = '<div class="hint">Start typing a name...</div>'; return; }
+
+    var found = roster.filter(function (s) { return matchesQuery(s, q); });
+
+    if (!found.length) {
+      resultsContainer.innerHTML = '<button class="no-match-link" id="noMatchSend">Click here to send "' + escapeHtml(raw) + '" as typed</button>';
+      var btn = document.getElementById('noMatchSend');
+      btn.addEventListener('click', function () {
+        var student = { first: raw, last: '', full: raw, adhoc: true, grade: '' };
+        sendCall([student]);
+      });
+      return;
+    }
+
+    var shown = found.slice(0, 8);
+    resultsContainer.innerHTML = shown.map(function (s, i) {
+      var key = s.first + '|' + s.last;
+      var checked = !!selected[key];
+      return (
+        '<div class="result-row" data-key="' + escapeHtml(key) + '" data-idx="' + i + '">' +
+          '<div class="checkbox' + (checked ? ' checked' : '') + '" data-action="check">' + (checked ? '✓' : '') + '</div>' +
+          '<div class="name-area" data-action="send">' +
+            '<div class="full">' + escapeHtml(s.full) + '</div>' +
+            '<div class="grade">Grade ' + escapeHtml(String(s.grade || '')) + '</div>' +
+          '</div>' +
+          '<button class="send-now" data-action="send">Send</button>' +
+        '</div>'
+      );
+    }).join('') + (found.length > shown.length
+      ? '<div class="more-matches">' + (found.length - shown.length) + ' more match' + (found.length - shown.length === 1 ? '' : 'es') + ' — keep typing</div>'
+      : '');
+
+    window.__lastShown = shown;
+  }
+
+  resultsContainer.addEventListener('click', function (e) {
+    var actionEl = e.target.closest('[data-action]');
+    if (!actionEl) return;
+    var row = e.target.closest('.result-row');
+    var idx = parseInt(row.getAttribute('data-idx'), 10);
+    var student = window.__lastShown[idx];
+    var key = student.first + '|' + student.last;
+
+    if (actionEl.getAttribute('data-action') === 'check') {
+      if (selected[key]) { delete selected[key]; } else { selected[key] = student; }
+      renderResults();
+      updateBatchBar();
+    } else {
+      sendCall([student]);
+      row.classList.add('flash');
+    }
+  });
+
+  function updateBatchBar() {
+    var keys = Object.keys(selected);
+    if (keys.length > 0) { batchBar.classList.add('show'); batchCount.textContent = keys.length + ' selected'; }
+    else { batchBar.classList.remove('show'); }
+  }
+
+  document.getElementById('batchSend').addEventListener('click', function () {
+    var students = Object.keys(selected).map(function (k) { return selected[k]; });
+    if (!students.length) return;
+    sendCall(students);
+    selected = {};
+    updateBatchBar();
+    renderResults();
+  });
+
+  searchInput.addEventListener('input', renderResults);
+
+  /* ---------- Sending ---------- */
+  function sendCall(students) {
+    var clientIds = students.map(function () { return genTempId(); });
+    students.forEach(function (s, i) {
+      recentSent.push({ id: clientIds[i], full: s.full, sentAt: Date.now() });
+    });
+    recentSent = recentSent.slice(-3);
+    saveRecentSent();
+    renderStrip();
+    toast(students.length > 1 ? 'Sent ' + students.length + ' students' : 'Sent ' + students[0].full);
+    searchInput.value = '';
+    renderResults();
+
+    var payload = {
+      action: 'call',
+      clientIds: clientIds,
+      students: students.map(function (s) {
+        return { first: s.first, last: s.last, full: s.full, adhoc: !!s.adhoc };
+      })
+    };
+    queueOrSend(payload);
+  }
+
+  function queueOrSend(payload) { pendingSends.push(payload); savePending(); flushPending(); }
+
+  function flushPending() {
+    if (!pendingSends.length) return;
+    var next = pendingSends[0];
+    fetch(APPS_SCRIPT_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify(next)
+    }).then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (next.action === 'call' && next.clientIds && data.added) {
+          data.added.forEach(function (entry, i) {
+            var tempId = next.clientIds[i];
+            var match = recentSent.find(function (r) { return r.id === tempId; });
+            if (match) match.id = entry.id;
+          });
+          saveRecentSent();
+          renderStrip();
+        }
+        pendingSends.shift();
+        savePending();
+        setOnline(true);
+        if (pendingSends.length) flushPending();
+      })
+      .catch(function () { setOnline(false); });
+  }
+
+  /* ====================================================================
+     CAFETERIA VIEW — single 14-slot board, split into two columns
+  ==================================================================== */
+  document.getElementById('dateLabel').textContent = new Date().toLocaleDateString(undefined, {
+    weekday: 'short', month: 'short', day: 'numeric'
+  });
+
+  var announcedIds = JSON.parse(localStorage.getItem('byecar_announced') || '[]');
+  var flashingIds = {};
+  var announceQueue = [];
+  var announcing = false;
+
+  function queueAnnouncement(ids) { announceQueue.push(ids); processAnnounceQueue(); }
+  function processAnnounceQueue() {
+    if (announcing || !announceQueue.length) return;
+    announcing = true;
+    var ids = announceQueue.shift();
+    var isBatch = ids.length > 1;
+    playChime();
+    setTimeout(function () {
+      speak(isBatch ? 'Calling for these students' : 'Calling for next student');
+      postAnnounced(ids);
+      setTimeout(function () { announcing = false; processAnnounceQueue(); }, 1400);
+    }, 400);
+  }
+  function postAnnounced(ids) {
+    fetch(APPS_SCRIPT_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({ action: 'announced', ids: ids })
+    }).catch(function () {});
+  }
+
+  function activeQueue(queue) {
+    return queue
+      .filter(function (q) { return q.status === 'called' || q.status === 'enroute'; })
+      .sort(function (a, b) { return a.ts - b.ts; });
+  }
+
+  function renderBoard(queue) {
+    var active = activeQueue(queue);
+    var left = active.slice(0, 7);
+    var right = active.slice(7);
+    renderCafeCol('leftCards', left, 1);
+    renderCafeCol('rightCards', right, 8);
+  }
+
+  function renderCafeCol(elId, items, startNum) {
+    var el = document.getElementById(elId);
+    if (!items.length) { el.innerHTML = '<div class="empty-hint">—</div>'; return; }
+    el.innerHTML = items.map(function (item, i) {
+      var status = item.status;
+      var flashClass = (status === 'called' && flashingIds[item.id]) ? ' flashing' : '';
+      return '<div class="card ' + status + flashClass + '" data-id="' + item.id + '" data-status="' + status + '">' +
+        '<div class="slot-badge">' + (startNum + i) + '</div>' +
+        '<span>' + escapeHtml(item.full) + '</span></div>';
+    }).join('');
+  }
+
+  document.querySelectorAll('#view-cafeteria .cards').forEach(function (col) {
+    col.addEventListener('click', function (e) {
+      var card = e.target.closest('.card');
+      if (!card) return;
+      var status = card.getAttribute('data-status');
+      var id = card.getAttribute('data-id');
+      if (status === 'called') postAction({ action: 'enroute', id: id });
+    });
+  });
+
+  function postAction(payload) {
+    fetch(APPS_SCRIPT_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify(payload)
+    }).then(function () { poll(); }).catch(function () { setOnline(false); });
+  }
+
+  function handleNewCalls(queue) {
+    var newBatches = {};
+    var newSingles = [];
+    queue.forEach(function (item) {
+      if (item.status !== 'called') return;
+      if (announcedIds.indexOf(item.id) !== -1) return;
+      announcedIds.push(item.id);
+      flashingIds[item.id] = true;
+      setTimeout(function () { delete flashingIds[item.id]; renderBoard(lastQueue); }, FLASH_MS);
+
+      if (item.batchId) {
+        if (!newBatches[item.batchId]) newBatches[item.batchId] = [];
+        newBatches[item.batchId].push(item.id);
+      } else {
+        newSingles.push(item.id);
+      }
+    });
+    var batchKeys = Object.keys(newBatches);
+    if (batchKeys.length || newSingles.length) {
+      localStorage.setItem('byecar_announced', JSON.stringify(announcedIds.slice(-500)));
+    }
+    batchKeys.forEach(function (k) { queueAnnouncement(newBatches[k]); });
+    newSingles.forEach(function (id) { queueAnnouncement([id]); });
+  }
+
+  /* ====================================================================
+     DOOR VIEW — single locked list with 7s local undo before finalizing
+  ==================================================================== */
+  var doorListEl = document.getElementById('doorList');
+  var doorPending = {}; // id -> timeout handle
+  var doorKnownStatuses = {}; // id -> last seen status, for detecting enroute transitions
+
+  function renderDoor(queue) {
+    var active = activeQueue(queue);
+    if (!active.length) { doorListEl.innerHTML = '<div class="hint">No one waiting right now.</div>'; return; }
+    doorListEl.innerHTML = active.map(function (item, i) {
+      var isPending = !!doorPending[item.id];
+      var cls = isPending ? 'pending' : item.status;
+      var tag = isPending ? 'Tap to undo' : (item.status === 'enroute' ? 'En Route' : 'Called');
+      return '<div class="door-card ' + cls + '" data-id="' + item.id + '">' +
+        '<div class="slot-badge">' + (i + 1) + '</div>' +
+        '<div class="info">' + escapeHtml(item.full) + '<span class="tag">' + tag + '</span></div></div>';
+    }).join('');
+  }
+
+  doorListEl.addEventListener('click', function (e) {
+    var card = e.target.closest('.door-card');
+    if (!card) return;
+    var id = card.getAttribute('data-id');
+
+    if (doorPending[id]) {
+      clearTimeout(doorPending[id]);
+      delete doorPending[id];
+      renderDoor(lastQueue);
+      return;
+    }
+
+    doorPending[id] = setTimeout(function () {
+      delete doorPending[id];
+      postDeparted(id);
+    }, DOOR_UNDO_MS);
+    renderDoor(lastQueue);
+  });
+
+  function postDeparted(id) {
+    fetch(APPS_SCRIPT_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({ action: 'departed', id: id })
+    }).then(function () { poll(); }).catch(function () { setOnline(false); });
+  }
+
+  /* ====================================================================
+     SHARED POLLING
+  ==================================================================== */
+  function poll() {
+    fetch(APPS_SCRIPT_URL + '?action=state')
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        setOnline(true);
+        var queue = data.queue || [];
+        if (mode === 'cafeteria') handleNewCalls(queue);
+        if (mode === 'door') {
+          // Chime when a student transitions to En Route (cafeteria just tapped them)
+          queue.forEach(function (item) {
+            var prev = doorKnownStatuses[item.id];
+            if (item.status === 'enroute' && prev && prev !== 'enroute') {
+              playChime();
+            }
+            doorKnownStatuses[item.id] = item.status;
+          });
+        }
+        lastQueue = queue;
+        localStorage.setItem('byecar_lastQueue', JSON.stringify(lastQueue));
+        if (mode === 'cafeteria') renderBoard(lastQueue);
+        if (mode === 'door') renderDoor(lastQueue);
+        if (mode === 'car') renderStrip();
+      })
+      .catch(function () { setOnline(false); });
+  }
+
+  /* ====================================================================
+     RESET
+  ==================================================================== */
+  var resetOverlay = document.getElementById('resetOverlay');
+  document.getElementById('resetBtn').addEventListener('click', function () {
+    resetOverlay.style.display = 'flex';
+  });
+  document.getElementById('resetCancel').addEventListener('click', function () {
+    resetOverlay.style.display = 'none';
+  });
+  document.getElementById('resetConfirm').addEventListener('click', function () {
+    resetOverlay.style.display = 'none';
+    // Clear all local state
+    localStorage.removeItem('byecar_lastQueue');
+    localStorage.removeItem('byecar_recentSent');
+    localStorage.removeItem('byecar_pending');
+    localStorage.removeItem('byecar_announced');
+    recentSent = [];
+    pendingSends = [];
+    announcedIds = [];
+    flashingIds = {};
+    announceQueue = [];
+    announcing = false;
+    doorPending = {};
+    doorKnownStatuses = {};
+    lastQueue = [];
+    // Tell the server to wipe the queue too
+    fetch(APPS_SCRIPT_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({ action: 'reset' })
+    }).then(function () {
+      setOnline(true);
+      renderStrip();
+      renderBoard([]);
+      renderDoor([]);
+      refreshPendingNote();
+      toast('System reset ✓');
+    }).catch(function () {
+      setOnline(false);
+      toast('Reset sent — reconnecting...');
+    });
+  });
+
+  /* ====================================================================
+     INIT
+  ==================================================================== */
+  applyMode();
+  renderResults();
+  refreshPendingNote();
+  loadRoster();
+  poll();
+  setInterval(poll, POLL_MS);
+  setInterval(flushPending, 5000);
+  window.addEventListener('online', flushPending);
+</script>
+
+</body>
+</html><!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>BMS Bye Car</title>
+<style>
+  :root {
+    --purple: #3F2167;
+    --purple-light: #6B46B0;
+    --gold: #C9A66B;
+    --cream: #FAF7F0;
+    --text: #241734;
+    --muted: #8B7FA3;
+    --muted-light: #B7ACCB;
+    --called: #E5483D;
+    --called-glow: #FF8A65;
+    --enroute: #F2B807;
+    --pending: #8B7FA3;
+    --ok: #3C9D5C;
+    --danger: #C0392B;
+    --line: #E3DCEF;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body {
+    margin: 0; padding: 0; height: 100%; width: 100%;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: var(--cream); color: var(--text);
+    overscroll-behavior: none;
+  }
+  body { display: flex; flex-direction: column; height: 100vh; min-height: 0; }
+
+  header {
+    background: var(--purple); color: #fff;
+    padding: 12px 16px; flex: 0 0 auto;
+    display: flex; align-items: center; justify-content: space-between;
+    flex-wrap: wrap; row-gap: 8px;
+  }
+  header h1 { margin: 0; font-size: 18px; font-weight: 800; letter-spacing: .3px; }
+  .mode-switch { display: flex; gap: 6px; }
+  .mode-switch button {
+    background: rgba(255,255,255,0.15); color: #fff; border: none;
+    padding: 8px 12px; border-radius: 8px; font-size: 13px; font-weight: 700;
+  }
+  .mode-switch button.active { background: var(--gold); color: var(--purple); }
+  .header-right { display: flex; align-items: center; gap: 12px; }
+  .dot { width: 11px; height: 11px; border-radius: 50%; background: var(--ok); flex: 0 0 auto; }
+  .dot.offline { background: var(--danger); }
+  .pending-note { font-size: 11px; color: var(--gold); }
+
+  .view { display: none; flex: 1; min-height: 0; flex-direction: column; }
+  .view.active { display: flex; }
+
+  /* ---------- Car view ---------- */
+  .status-strip { flex: 0 0 auto; padding: 10px 16px 0; display: flex; flex-direction: column; gap: 6px; }
+  .status-row {
+    display: flex; align-items: center; gap: 10px; background: #fff;
+    border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px;
+  }
+  .status-row .num {
+    width: 22px; height: 22px; border-radius: 50%; background: var(--purple);
+    color: #fff; font-size: 12px; font-weight: 800; display: flex; align-items: center; justify-content: center;
+    flex: 0 0 auto;
+  }
+  .status-row .name { flex: 1; font-weight: 600; font-size: 15px; }
+  .status-row .state { font-size: 12px; font-weight: 700; }
+  .status-row .state.sending { color: var(--muted); }
+  .status-row .state.called { color: var(--ok); }
+
+  .search-wrap { padding: 10px 16px; flex: 0 0 auto; display: flex; gap: 8px; }
+  #search {
+    flex: 1; min-width: 0; padding: 14px 16px; font-size: 18px; border-radius: 12px;
+    border: 2px solid var(--line); outline: none; background: #fff; color: var(--text);
+  }
+  #search:focus { border-color: var(--purple-light); }
+  #carMain { flex: 1; min-height: 0; overflow-y: auto; padding: 0 16px 16px; }
+  .hint { color: var(--muted); font-size: 14px; text-align: center; margin-top: 24px; }
+
+  .result-row {
+    display: flex; align-items: center; gap: 12px;
+    background: #fff; border: 1px solid var(--line); border-radius: 12px;
+    padding: 12px 14px; margin-bottom: 8px;
+  }
+  .result-row.flash { animation: sentFlash .5s ease; }
+  @keyframes sentFlash { 0% { background:#fff; } 40% { background:#DDF3E2; } 100% { background:#fff; } }
+
+  .checkbox {
+    width: 26px; height: 26px; border-radius: 8px; border: 2px solid var(--purple-light);
+    flex: 0 0 auto; display: flex; align-items: center; justify-content: center;
+    color: #fff; font-size: 16px; background: #fff;
+  }
+  .checkbox.checked { background: var(--purple-light); }
+
+  .name-area { flex: 1; min-height: 0; }
+  .name-area .full { font-size: 17px; font-weight: 600; }
+  .name-area .grade { font-size: 12px; color: var(--muted); }
+
+  .send-now {
+    flex: 0 0 auto; background: var(--purple); color: #fff; border: none;
+    border-radius: 10px; padding: 10px 14px; font-size: 14px; font-weight: 600;
+  }
+
+  .more-matches { text-align: center; color: var(--muted); font-size: 13px; padding: 8px 0; }
+
+  .no-match-link {
+    display: block; width: 100%; text-align: center; background: #fff;
+    border: 2px dashed var(--purple-light); color: var(--purple); border-radius: 12px;
+    padding: 16px; font-size: 15px; font-weight: 600; margin-top: 8px;
+  }
+
+  .batch-bar {
+    flex: 0 0 auto; background: var(--purple); color: #fff; padding: 12px 16px;
+    display: none; align-items: center; justify-content: space-between;
+  }
+  .batch-bar.show { display: flex; }
+  .batch-bar button {
+    background: var(--gold); color: var(--purple); border: none; border-radius: 10px;
+    padding: 10px 18px; font-weight: 700; font-size: 15px;
+  }
+
+  .toast {
+    position: fixed; top: 64px; left: 50%; transform: translateX(-50%);
+    background: var(--purple); color: #fff; padding: 10px 18px; border-radius: 999px;
+    font-size: 14px; z-index: 50; opacity: 0; transition: opacity .25s;
+    pointer-events: none; max-width: 90%; text-align: center;
+  }
+  .toast.show { opacity: 1; }
+
+  /* ---------- Cafeteria view (2-column locked board) ---------- */
+  .cafe-bar { flex: 0 0 auto; padding: 8px 24px 0; display: flex; justify-content: flex-end; color: var(--muted); font-size: 14px; }
+  .board { flex: 1; min-height: 0; display: flex; gap: 18px; padding: 12px 24px 18px; }
+  .column { flex: 1; min-height: 0; display: flex; flex-direction: column; background: rgba(255,255,255,0.5); border-radius: 18px; padding: 14px; border: 2px solid rgba(255,255,255,0.6); }
+  .cards { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
+  .card { border-radius: 14px; padding: 14px 18px; font-size: 22px; font-weight: 700; color: #fff; display: flex; align-items: center; gap: 14px; box-shadow: 0 2px 6px rgba(0,0,0,0.12); }
+  .card .slot-badge { width: 34px; height: 34px; border-radius: 50%; background: rgba(255,255,255,0.3); display: flex; align-items: center; justify-content: center; font-size: 16px; flex: 0 0 auto; }
+  .card.called { background: var(--called); cursor: pointer; }
+  .card.called.flashing { animation: pulse 0.9s infinite; }
+  @keyframes pulse { 0%, 100% { background: var(--called); transform: scale(1); } 50% { background: var(--called-glow); transform: scale(1.03); } }
+  .card.enroute { background: var(--enroute); color: #4a3900; }
+  .empty-hint { color: var(--muted-light); text-align: center; font-size: 16px; margin-top: 20px; }
+
+  /* ---------- Door view (single locked list) ---------- */
+  #doorList { flex: 1; min-height: 0; overflow-y: auto; padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
+  .door-card { border-radius: 14px; padding: 16px 18px; font-size: 20px; font-weight: 700; color: #fff; display: flex; align-items: center; gap: 14px; box-shadow: 0 2px 6px rgba(0,0,0,0.12); }
+  .door-card .slot-badge { width: 32px; height: 32px; border-radius: 50%; background: rgba(255,255,255,0.3); display: flex; align-items: center; justify-content: center; font-size: 15px; flex: 0 0 auto; }
+  .door-card .info { flex: 1; }
+  .door-card .tag { font-size: 12px; font-weight: 600; opacity: .85; text-transform: uppercase; letter-spacing: .4px; display: block; margin-top: 2px; }
+  .door-card.called { background: var(--called); }
+  .door-card.enroute { background: var(--enroute); color: #4a3900; }
+  .door-card.pending { background: var(--pending); }
+  .door-card.pending .tag { opacity: 1; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Bye Car</h1>
+  <div class="mode-switch" id="modeSwitch">
+    <button data-mode="car">📱 Car</button>
+    <button data-mode="cafeteria">🖥️ Cafeteria</button>
+    <button data-mode="door">🚪 Door</button>
+  </div>
+  <div class="header-right">
+    <span class="pending-note" id="pendingNote"></span>
+    <button id="resetBtn" title="Reset system" style="background:rgba(255,255,255,0.15);border:none;color:#fff;border-radius:8px;padding:7px 11px;font-size:13px;font-weight:700;">↺ Reset</button>
+    <div class="dot" id="connDot"></div>
+  </div>
+</header>
+
+<!-- ===== CAR VIEW ===== -->
+<div class="view" id="view-car">
+  <div class="status-strip" id="statusStrip"></div>
+  <div class="search-wrap">
+    <input id="search" type="text" placeholder="Type a name..." autocomplete="off" autocapitalize="words">
+  </div>
+  <div id="carMain">
+    <div id="resultsContainer"></div>
+  </div>
+  <div class="batch-bar" id="batchBar">
+    <span id="batchCount">0 selected</span>
+    <button id="batchSend">Send Group</button>
+  </div>
+</div>
+
+<!-- ===== CAFETERIA VIEW ===== -->
+<div class="view" id="view-cafeteria">
+  <div class="cafe-bar"><span id="dateLabel"></span></div>
+  <div class="board">
+    <div class="column"><div class="cards" id="leftCards"></div></div>
+    <div class="column"><div class="cards" id="rightCards"></div></div>
+  </div>
+</div>
+
+<!-- ===== DOOR VIEW ===== -->
+<div class="view" id="view-door">
+  <div id="doorList"></div>
+</div>
+
+<!-- ===== RESET CONFIRMATION MODAL ===== -->
+<div id="resetOverlay" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.55); z-index:100; align-items:center; justify-content:center;">
+  <div style="background:#fff; border-radius:18px; padding:28px 24px; max-width:320px; width:90%; text-align:center; box-shadow:0 8px 32px rgba(0,0,0,0.25);">
+    <div style="font-size:36px; margin-bottom:12px;">⚠️</div>
+    <p style="font-size:18px; font-weight:800; color:var(--text); margin:0 0 8px;">Reset the system?</p>
+    <p style="font-size:14px; color:var(--muted); margin:0 0 24px;">This clears all screens on all devices. The pickup log in the sheet is not affected.</p>
+    <div style="display:flex; gap:10px;">
+      <button id="resetCancel" style="flex:1; padding:14px; border-radius:10px; border:2px solid var(--line); background:#fff; font-size:15px; font-weight:700; color:var(--text);">Cancel</button>
+      <button id="resetConfirm" style="flex:1; padding:14px; border-radius:10px; border:none; background:var(--danger); color:#fff; font-size:15px; font-weight:700;">Yes, Reset</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+  var APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbwv5EzBzqiEVIs3lkphhu42KdEab6YSY8Ff1NOHcBpQzM1i5gvd6RUV-k2z6FvAmoOe/exec';
+  var POLL_MS = 3000;
+  var FLASH_MS = 8000;
+  var DOOR_UNDO_MS = 7000;
+
+  var mode = localStorage.getItem('byecar_mode') || 'car';
+  var lastQueue = JSON.parse(localStorage.getItem('byecar_lastQueue') || '[]');
+
+  function escapeHtml(s) {
+    return (s || '').replace(/[&<>"']/g, function (c) {
+      return { '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c];
+    });
+  }
+  function formatTime(ts) {
+    var t = new Date(ts);
+    var hh = t.getHours(), mm = t.getMinutes();
+    var ampm = hh >= 12 ? 'PM' : 'AM';
+    hh = hh % 12; if (hh === 0) hh = 12;
+    var mmStr = mm < 10 ? '0' + mm : mm;
+    return hh + ':' + mmStr + ' ' + ampm;
+  }
+  function setOnline(isOnline) {
+    document.getElementById('connDot').classList.toggle('offline', !isOnline);
+  }
+  function toast(msg) {
+    var t = document.getElementById('toast');
+    t.textContent = msg;
+    t.classList.add('show');
+    setTimeout(function () { t.classList.remove('show'); }, 1600);
+  }
+
+  /* ---------- Shared chime (Web Audio, original two-note tone) ---------- */
+  var audioCtx = null;
+  function getAudioCtx() {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    return audioCtx;
+  }
+  function tone(ctx, freq, startTime, duration) {
+    var osc = ctx.createOscillator();
+    var gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.value = freq;
+    gain.gain.setValueAtTime(0.0001, startTime);
+    gain.gain.exponentialRampToValueAtTime(0.35, startTime + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, startTime + duration);
+    osc.connect(gain); gain.connect(ctx.destination);
+    osc.start(startTime); osc.stop(startTime + duration + 0.02);
+  }
+  function playChime() {
+    var ctx = getAudioCtx();
+    var now = ctx.currentTime;
+    [0, 0.097].forEach(function(offset) {
+      tone(ctx, 660, now + offset, 0.1);
+      tone(ctx, 880, now + offset + 0.1, 0.1);
+      tone(ctx, 1100, now + offset + 0.2, 0.16);
+    });
+  }
+  function speak(text) {
+    if (!window.speechSynthesis) return;
+    var u = new SpeechSynthesisUtterance(text);
+    u.rate = 0.95;
+    window.speechSynthesis.speak(u);
+  }
+
+  /* ====================================================================
+     MODE SWITCHING
+  ==================================================================== */
+  function applyMode() {
+    document.querySelectorAll('.view').forEach(function (v) { v.classList.remove('active'); });
+    document.getElementById('view-' + mode).classList.add('active');
+    document.querySelectorAll('#modeSwitch button').forEach(function (b) {
+      b.classList.toggle('active', b.getAttribute('data-mode') === mode);
+    });
+    localStorage.setItem('byecar_mode', mode);
+    if (mode === 'cafeteria') renderBoard(lastQueue);
+    if (mode === 'door') renderDoor(lastQueue);
+    if (mode === 'car') { renderStrip(); searchInput.focus(); }
+  }
+
+  document.getElementById('modeSwitch').addEventListener('click', function (e) {
+    var btn = e.target.closest('button');
+    if (!btn) return;
+    mode = btn.getAttribute('data-mode');
+    applyMode();
+    poll();
+  });
+
+  /* ====================================================================
+     CAR VIEW
+  ==================================================================== */
+  var roster = [];
+  var selected = {};
+  var pendingSends = JSON.parse(localStorage.getItem('byecar_pending') || '[]');
+  var recentSent = JSON.parse(localStorage.getItem('byecar_recentSent') || '[]'); // [{id, full, sentAt}]
+
+  var searchInput = document.getElementById('search');
+  var resultsContainer = document.getElementById('resultsContainer');
+  var batchBar = document.getElementById('batchBar');
+  var batchCount = document.getElementById('batchCount');
+  var pendingNote = document.getElementById('pendingNote');
+  var statusStrip = document.getElementById('statusStrip');
+
+  function refreshPendingNote() {
+    pendingNote.textContent = pendingSends.length ? pendingSends.length + ' waiting to send...' : '';
+  }
+  function savePending() {
+    localStorage.setItem('byecar_pending', JSON.stringify(pendingSends));
+    refreshPendingNote();
+  }
+  function saveRecentSent() { localStorage.setItem('byecar_recentSent', JSON.stringify(recentSent)); }
+
+  function renderStrip() {
+    // Drop entries whose real ID is no longer in the server queue (departed/cleared)
+    recentSent = recentSent.filter(function (item) {
+      if (item.id.indexOf('tmp_') === 0) return true; // still sending, keep
+      return !!lastQueue.find(function (q) { return q.id === item.id; });
+    });
+    saveRecentSent();
+    if (!recentSent.length) { statusStrip.innerHTML = ''; return; }
+    var n = recentSent.length;
+    statusStrip.innerHTML = recentSent.map(function (item, i) {
+      var label = n - i;
+      var live = lastQueue.find(function (q) { return q.id === item.id; });
+      var announced = live && live.announcedAt;
+      var stateHtml = announced
+        ? '<span class="state called">Called ' + formatTime(live.announcedAt) + '</span>'
+        : '<span class="state sending">Sending...</span>';
+      return '<div class="status-row"><div class="num">' + label + '</div>' +
+        '<div class="name">' + escapeHtml(item.full) + '</div>' + stateHtml + '</div>';
+    }).join('');
+  }
+
+  function genTempId() { return 'tmp_' + Math.random().toString(36).slice(2) + Date.now(); }
+
+  function loadRoster() {
+    var cached = localStorage.getItem('byecar_roster');
+    if (cached) { try { roster = JSON.parse(cached); } catch (e) { roster = []; } }
+    fetch(APPS_SCRIPT_URL + '?action=roster')
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        roster = data.roster || [];
+        localStorage.setItem('byecar_roster', JSON.stringify(roster));
+        setOnline(true);
+      })
+      .catch(function () { setOnline(false); });
+  }
+
+  function matchesQuery(student, q) {
+    var hay = (student.first + ' ' + student.last + ' ' + student.full).toLowerCase();
+    return hay.indexOf(q) !== -1;
+  }
+
+  function renderResults() {
+    var raw = searchInput.value.trim();
+    var q = raw.toLowerCase();
+    if (!q) { resultsContainer.innerHTML = '<div class="hint">Start typing a name...</div>'; return; }
+
+    var found = roster.filter(function (s) { return matchesQuery(s, q); });
+
+    if (!found.length) {
+      resultsContainer.innerHTML = '<button class="no-match-link" id="noMatchSend">Click here to send "' + escapeHtml(raw) + '" as typed</button>';
+      var btn = document.getElementById('noMatchSend');
+      btn.addEventListener('click', function () {
+        var student = { first: raw, last: '', full: raw, adhoc: true, grade: '' };
+        sendCall([student]);
+      });
+      return;
+    }
+
+    var shown = found.slice(0, 8);
+    resultsContainer.innerHTML = shown.map(function (s, i) {
+      var key = s.first + '|' + s.last;
+      var checked = !!selected[key];
+      return (
+        '<div class="result-row" data-key="' + escapeHtml(key) + '" data-idx="' + i + '">' +
+          '<div class="checkbox' + (checked ? ' checked' : '') + '" data-action="check">' + (checked ? '✓' : '') + '</div>' +
+          '<div class="name-area" data-action="send">' +
+            '<div class="full">' + escapeHtml(s.full) + '</div>' +
+            '<div class="grade">Grade ' + escapeHtml(String(s.grade || '')) + '</div>' +
+          '</div>' +
+          '<button class="send-now" data-action="send">Send</button>' +
+        '</div>'
+      );
+    }).join('') + (found.length > shown.length
+      ? '<div class="more-matches">' + (found.length - shown.length) + ' more match' + (found.length - shown.length === 1 ? '' : 'es') + ' — keep typing</div>'
+      : '');
+
+    window.__lastShown = shown;
+  }
+
+  resultsContainer.addEventListener('click', function (e) {
+    var actionEl = e.target.closest('[data-action]');
+    if (!actionEl) return;
+    var row = e.target.closest('.result-row');
+    var idx = parseInt(row.getAttribute('data-idx'), 10);
+    var student = window.__lastShown[idx];
+    var key = student.first + '|' + student.last;
+
+    if (actionEl.getAttribute('data-action') === 'check') {
+      if (selected[key]) { delete selected[key]; } else { selected[key] = student; }
+      renderResults();
+      updateBatchBar();
+    } else {
+      sendCall([student]);
+      row.classList.add('flash');
+    }
+  });
+
+  function updateBatchBar() {
+    var keys = Object.keys(selected);
+    if (keys.length > 0) { batchBar.classList.add('show'); batchCount.textContent = keys.length + ' selected'; }
+    else { batchBar.classList.remove('show'); }
+  }
+
+  document.getElementById('batchSend').addEventListener('click', function () {
+    var students = Object.keys(selected).map(function (k) { return selected[k]; });
+    if (!students.length) return;
+    sendCall(students);
+    selected = {};
+    updateBatchBar();
+    renderResults();
+  });
+
+  searchInput.addEventListener('input', renderResults);
+
+  /* ---------- Sending ---------- */
+  function sendCall(students) {
+    var clientIds = students.map(function () { return genTempId(); });
+    students.forEach(function (s, i) {
+      recentSent.push({ id: clientIds[i], full: s.full, sentAt: Date.now() });
+    });
+    recentSent = recentSent.slice(-3);
+    saveRecentSent();
+    renderStrip();
+    toast(students.length > 1 ? 'Sent ' + students.length + ' students' : 'Sent ' + students[0].full);
+    searchInput.value = '';
+    renderResults();
+
+    var payload = {
+      action: 'call',
+      clientIds: clientIds,
+      students: students.map(function (s) {
+        return { first: s.first, last: s.last, full: s.full, adhoc: !!s.adhoc };
+      })
+    };
+    queueOrSend(payload);
+  }
+
+  function queueOrSend(payload) { pendingSends.push(payload); savePending(); flushPending(); }
+
+  function flushPending() {
+    if (!pendingSends.length) return;
+    var next = pendingSends[0];
+    fetch(APPS_SCRIPT_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify(next)
+    }).then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (next.action === 'call' && next.clientIds && data.added) {
+          data.added.forEach(function (entry, i) {
+            var tempId = next.clientIds[i];
+            var match = recentSent.find(function (r) { return r.id === tempId; });
+            if (match) match.id = entry.id;
+          });
+          saveRecentSent();
+          renderStrip();
+        }
+        pendingSends.shift();
+        savePending();
+        setOnline(true);
+        if (pendingSends.length) flushPending();
+      })
+      .catch(function () { setOnline(false); });
+  }
+
+  /* ====================================================================
+     CAFETERIA VIEW — single 14-slot board, split into two columns
+  ==================================================================== */
+  document.getElementById('dateLabel').textContent = new Date().toLocaleDateString(undefined, {
+    weekday: 'short', month: 'short', day: 'numeric'
+  });
+
+  var announcedIds = JSON.parse(localStorage.getItem('byecar_announced') || '[]');
+  var flashingIds = {};
+  var announceQueue = [];
+  var announcing = false;
+
+  function queueAnnouncement(ids) { announceQueue.push(ids); processAnnounceQueue(); }
+  function processAnnounceQueue() {
+    if (announcing || !announceQueue.length) return;
+    announcing = true;
+    var ids = announceQueue.shift();
+    var isBatch = ids.length > 1;
+    playChime();
+    setTimeout(function () {
+      speak(isBatch ? 'Calling for these students' : 'Calling for next student');
+      postAnnounced(ids);
+      setTimeout(function () { announcing = false; processAnnounceQueue(); }, 1400);
+    }, 400);
+  }
+  function postAnnounced(ids) {
+    fetch(APPS_SCRIPT_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({ action: 'announced', ids: ids })
+    }).catch(function () {});
+  }
+
+  function activeQueue(queue) {
+    return queue
+      .filter(function (q) { return q.status === 'called' || q.status === 'enroute'; })
+      .sort(function (a, b) { return a.ts - b.ts; });
+  }
+
+  function renderBoard(queue) {
+    var active = activeQueue(queue);
+    var left = active.slice(0, 7);
+    var right = active.slice(7);
+    renderCafeCol('leftCards', left, 1);
+    renderCafeCol('rightCards', right, 8);
+  }
+
+  function renderCafeCol(elId, items, startNum) {
+    var el = document.getElementById(elId);
+    if (!items.length) { el.innerHTML = '<div class="empty-hint">—</div>'; return; }
+    el.innerHTML = items.map(function (item, i) {
+      var status = item.status;
+      var flashClass = (status === 'called' && flashingIds[item.id]) ? ' flashing' : '';
+      return '<div class="card ' + status + flashClass + '" data-id="' + item.id + '" data-status="' + status + '">' +
+        '<div class="slot-badge">' + (startNum + i) + '</div>' +
+        '<span>' + escapeHtml(item.full) + '</span></div>';
+    }).join('');
+  }
+
+  document.querySelectorAll('#view-cafeteria .cards').forEach(function (col) {
+    col.addEventListener('click', function (e) {
+      var card = e.target.closest('.card');
+      if (!card) return;
+      var status = card.getAttribute('data-status');
+      var id = card.getAttribute('data-id');
+      if (status === 'called') postAction({ action: 'enroute', id: id });
+    });
+  });
+
+  function postAction(payload) {
+    fetch(APPS_SCRIPT_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify(payload)
+    }).then(function () { poll(); }).catch(function () { setOnline(false); });
+  }
+
+  function handleNewCalls(queue) {
+    var newBatches = {};
+    var newSingles = [];
+    queue.forEach(function (item) {
+      if (item.status !== 'called') return;
+      if (announcedIds.indexOf(item.id) !== -1) return;
+      announcedIds.push(item.id);
+      flashingIds[item.id] = true;
+      setTimeout(function () { delete flashingIds[item.id]; renderBoard(lastQueue); }, FLASH_MS);
+
+      if (item.batchId) {
+        if (!newBatches[item.batchId]) newBatches[item.batchId] = [];
+        newBatches[item.batchId].push(item.id);
+      } else {
+        newSingles.push(item.id);
+      }
+    });
+    var batchKeys = Object.keys(newBatches);
+    if (batchKeys.length || newSingles.length) {
+      localStorage.setItem('byecar_announced', JSON.stringify(announcedIds.slice(-500)));
+    }
+    batchKeys.forEach(function (k) { queueAnnouncement(newBatches[k]); });
+    newSingles.forEach(function (id) { queueAnnouncement([id]); });
+  }
+
+  /* ====================================================================
+     DOOR VIEW — single locked list with 7s local undo before finalizing
+  ==================================================================== */
+  var doorListEl = document.getElementById('doorList');
+  var doorPending = {}; // id -> timeout handle
+  var doorKnownStatuses = {}; // id -> last seen status, for detecting enroute transitions
+
+  function renderDoor(queue) {
+    var active = activeQueue(queue);
+    if (!active.length) { doorListEl.innerHTML = '<div class="hint">No one waiting right now.</div>'; return; }
+    doorListEl.innerHTML = active.map(function (item, i) {
+      var isPending = !!doorPending[item.id];
+      var cls = isPending ? 'pending' : item.status;
+      var tag = isPending ? 'Tap to undo' : (item.status === 'enroute' ? 'En Route' : 'Called');
+      return '<div class="door-card ' + cls + '" data-id="' + item.id + '">' +
+        '<div class="slot-badge">' + (i + 1) + '</div>' +
+        '<div class="info">' + escapeHtml(item.full) + '<span class="tag">' + tag + '</span></div></div>';
+    }).join('');
+  }
+
+  doorListEl.addEventListener('click', function (e) {
+    var card = e.target.closest('.door-card');
+    if (!card) return;
+    var id = card.getAttribute('data-id');
+
+    if (doorPending[id]) {
+      clearTimeout(doorPending[id]);
+      delete doorPending[id];
+      renderDoor(lastQueue);
+      return;
+    }
+
+    doorPending[id] = setTimeout(function () {
+      delete doorPending[id];
+      postDeparted(id);
+    }, DOOR_UNDO_MS);
+    renderDoor(lastQueue);
+  });
+
+  function postDeparted(id) {
+    fetch(APPS_SCRIPT_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({ action: 'departed', id: id })
+    }).then(function () { poll(); }).catch(function () { setOnline(false); });
+  }
+
+  /* ====================================================================
+     SHARED POLLING
+  ==================================================================== */
+  function poll() {
+    fetch(APPS_SCRIPT_URL + '?action=state')
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        setOnline(true);
+        var queue = data.queue || [];
+        if (mode === 'cafeteria') handleNewCalls(queue);
+        if (mode === 'door') {
+          // Chime when a student transitions to En Route (cafeteria just tapped them)
+          queue.forEach(function (item) {
+            var prev = doorKnownStatuses[item.id];
+            if (item.status === 'enroute' && prev && prev !== 'enroute') {
+              playChime();
+            }
+            doorKnownStatuses[item.id] = item.status;
+          });
+        }
+        lastQueue = queue;
+        localStorage.setItem('byecar_lastQueue', JSON.stringify(lastQueue));
+        if (mode === 'cafeteria') renderBoard(lastQueue);
+        if (mode === 'door') renderDoor(lastQueue);
+        if (mode === 'car') renderStrip();
+      })
+      .catch(function () { setOnline(false); });
+  }
+
+  /* ====================================================================
+     RESET
+  ==================================================================== */
+  var resetOverlay = document.getElementById('resetOverlay');
+  document.getElementById('resetBtn').addEventListener('click', function () {
+    resetOverlay.style.display = 'flex';
+  });
+  document.getElementById('resetCancel').addEventListener('click', function () {
+    resetOverlay.style.display = 'none';
+  });
+  document.getElementById('resetConfirm').addEventListener('click', function () {
+    resetOverlay.style.display = 'none';
+    // Clear all local state
+    localStorage.removeItem('byecar_lastQueue');
+    localStorage.removeItem('byecar_recentSent');
+    localStorage.removeItem('byecar_pending');
+    localStorage.removeItem('byecar_announced');
+    recentSent = [];
+    pendingSends = [];
+    announcedIds = [];
+    flashingIds = {};
+    announceQueue = [];
+    announcing = false;
+    doorPending = {};
+    doorKnownStatuses = {};
+    lastQueue = [];
+    // Tell the server to wipe the queue too
+    fetch(APPS_SCRIPT_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({ action: 'reset' })
+    }).then(function () {
+      setOnline(true);
+      renderStrip();
+      renderBoard([]);
+      renderDoor([]);
+      refreshPendingNote();
+      toast('System reset ✓');
+    }).catch(function () {
+      setOnline(false);
+      toast('Reset sent — reconnecting...');
+    });
+  });
+
+  /* ====================================================================
+     INIT
+  ==================================================================== */
+  applyMode();
+  renderResults();
+  refreshPendingNote();
+  loadRoster();
+  poll();
+  setInterval(poll, POLL_MS);
+  setInterval(flushPending, 5000);
+  window.addEventListener('online', flushPending);
+</script>
+
+</body>
+</html><!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>BMS Bye Car</title>
+<style>
+  :root {
+    --purple: #3F2167;
+    --purple-light: #6B46B0;
+    --gold: #C9A66B;
+    --cream: #FAF7F0;
+    --text: #241734;
+    --muted: #8B7FA3;
+    --muted-light: #B7ACCB;
+    --called: #E5483D;
+    --called-glow: #FF8A65;
+    --enroute: #F2B807;
+    --pending: #8B7FA3;
+    --ok: #3C9D5C;
+    --danger: #C0392B;
+    --line: #E3DCEF;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body {
+    margin: 0; padding: 0; height: 100%; width: 100%;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: var(--cream); color: var(--text);
+    overscroll-behavior: none;
+  }
+  body { display: flex; flex-direction: column; height: 100vh; min-height: 0; }
+
+  header {
+    background: var(--purple); color: #fff;
+    padding: 12px 16px; flex: 0 0 auto;
+    display: flex; align-items: center; justify-content: space-between;
+    flex-wrap: wrap; row-gap: 8px;
+  }
+  header h1 { margin: 0; font-size: 18px; font-weight: 800; letter-spacing: .3px; }
+  .mode-switch { display: flex; gap: 6px; }
+  .mode-switch button {
+    background: rgba(255,255,255,0.15); color: #fff; border: none;
+    padding: 8px 12px; border-radius: 8px; font-size: 13px; font-weight: 700;
+  }
+  .mode-switch button.active { background: var(--gold); color: var(--purple); }
+  .header-right { display: flex; align-items: center; gap: 12px; }
+  .dot { width: 11px; height: 11px; border-radius: 50%; background: var(--ok); flex: 0 0 auto; }
+  .dot.offline { background: var(--danger); }
+  .pending-note { font-size: 11px; color: var(--gold); }
+
+  .view { display: none; flex: 1; min-height: 0; flex-direction: column; }
+  .view.active { display: flex; }
+
+  /* ---------- Car view ---------- */
+  .status-strip { flex: 0 0 auto; padding: 10px 16px 0; display: flex; flex-direction: column; gap: 6px; }
+  .status-row {
+    display: flex; align-items: center; gap: 10px; background: #fff;
+    border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px;
+  }
+  .status-row .num {
+    width: 22px; height: 22px; border-radius: 50%; background: var(--purple);
+    color: #fff; font-size: 12px; font-weight: 800; display: flex; align-items: center; justify-content: center;
+    flex: 0 0 auto;
+  }
+  .status-row .name { flex: 1; font-weight: 600; font-size: 15px; }
+  .status-row .state { font-size: 12px; font-weight: 700; }
+  .status-row .state.sending { color: var(--muted); }
+  .status-row .state.called { color: var(--ok); }
+
+  .search-wrap { padding: 10px 16px; flex: 0 0 auto; display: flex; gap: 8px; }
+  #search {
+    flex: 1; min-width: 0; padding: 14px 16px; font-size: 18px; border-radius: 12px;
+    border: 2px solid var(--line); outline: none; background: #fff; color: var(--text);
+  }
+  #search:focus { border-color: var(--purple-light); }
+  #carMain { flex: 1; min-height: 0; overflow-y: auto; padding: 0 16px 16px; }
+  .hint { color: var(--muted); font-size: 14px; text-align: center; margin-top: 24px; }
+
+  .result-row {
+    display: flex; align-items: center; gap: 12px;
+    background: #fff; border: 1px solid var(--line); border-radius: 12px;
+    padding: 12px 14px; margin-bottom: 8px;
+  }
+  .result-row.flash { animation: sentFlash .5s ease; }
+  @keyframes sentFlash { 0% { background:#fff; } 40% { background:#DDF3E2; } 100% { background:#fff; } }
+
+  .checkbox {
+    width: 26px; height: 26px; border-radius: 8px; border: 2px solid var(--purple-light);
+    flex: 0 0 auto; display: flex; align-items: center; justify-content: center;
+    color: #fff; font-size: 16px; background: #fff;
+  }
+  .checkbox.checked { background: var(--purple-light); }
+
+  .name-area { flex: 1; min-height: 0; }
+  .name-area .full { font-size: 17px; font-weight: 600; }
+  .name-area .grade { font-size: 12px; color: var(--muted); }
+
+  .send-now {
+    flex: 0 0 auto; background: var(--purple); color: #fff; border: none;
+    border-radius: 10px; padding: 10px 14px; font-size: 14px; font-weight: 600;
+  }
+
+  .more-matches { text-align: center; color: var(--muted); font-size: 13px; padding: 8px 0; }
+
+  .no-match-link {
+    display: block; width: 100%; text-align: center; background: #fff;
+    border: 2px dashed var(--purple-light); color: var(--purple); border-radius: 12px;
+    padding: 16px; font-size: 15px; font-weight: 600; margin-top: 8px;
+  }
+
+  .batch-bar {
+    flex: 0 0 auto; background: var(--purple); color: #fff; padding: 12px 16px;
+    display: none; align-items: center; justify-content: space-between;
+  }
+  .batch-bar.show { display: flex; }
+  .batch-bar button {
+    background: var(--gold); color: var(--purple); border: none; border-radius: 10px;
+    padding: 10px 18px; font-weight: 700; font-size: 15px;
+  }
+
+  .toast {
+    position: fixed; top: 64px; left: 50%; transform: translateX(-50%);
+    background: var(--purple); color: #fff; padding: 10px 18px; border-radius: 999px;
+    font-size: 14px; z-index: 50; opacity: 0; transition: opacity .25s;
+    pointer-events: none; max-width: 90%; text-align: center;
+  }
+  .toast.show { opacity: 1; }
+
+  /* ---------- Cafeteria view (2-column locked board) ---------- */
+  .cafe-bar { flex: 0 0 auto; padding: 8px 24px 0; display: flex; justify-content: flex-end; color: var(--muted); font-size: 14px; }
+  .board { flex: 1; min-height: 0; display: flex; gap: 18px; padding: 12px 24px 18px; }
+  .column { flex: 1; min-height: 0; display: flex; flex-direction: column; background: rgba(255,255,255,0.5); border-radius: 18px; padding: 14px; border: 2px solid rgba(255,255,255,0.6); }
+  .cards { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
+  .card { border-radius: 14px; padding: 14px 18px; font-size: 22px; font-weight: 700; color: #fff; display: flex; align-items: center; gap: 14px; box-shadow: 0 2px 6px rgba(0,0,0,0.12); }
+  .card .slot-badge { width: 34px; height: 34px; border-radius: 50%; background: rgba(255,255,255,0.3); display: flex; align-items: center; justify-content: center; font-size: 16px; flex: 0 0 auto; }
+  .card.called { background: var(--called); cursor: pointer; }
+  .card.called.flashing { animation: pulse 0.9s infinite; }
+  @keyframes pulse { 0%, 100% { background: var(--called); transform: scale(1); } 50% { background: var(--called-glow); transform: scale(1.03); } }
+  .card.enroute { background: var(--enroute); color: #4a3900; }
+  .empty-hint { color: var(--muted-light); text-align: center; font-size: 16px; margin-top: 20px; }
+
+  /* ---------- Door view (single locked list) ---------- */
+  #doorList { flex: 1; min-height: 0; overflow-y: auto; padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
+  .door-card { border-radius: 14px; padding: 16px 18px; font-size: 20px; font-weight: 700; color: #fff; display: flex; align-items: center; gap: 14px; box-shadow: 0 2px 6px rgba(0,0,0,0.12); }
+  .door-card .slot-badge { width: 32px; height: 32px; border-radius: 50%; background: rgba(255,255,255,0.3); display: flex; align-items: center; justify-content: center; font-size: 15px; flex: 0 0 auto; }
+  .door-card .info { flex: 1; }
+  .door-card .tag { font-size: 12px; font-weight: 600; opacity: .85; text-transform: uppercase; letter-spacing: .4px; display: block; margin-top: 2px; }
+  .door-card.called { background: var(--called); }
+  .door-card.enroute { background: var(--enroute); color: #4a3900; }
+  .door-card.pending { background: var(--pending); }
+  .door-card.pending .tag { opacity: 1; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Bye Car</h1>
+  <div class="mode-switch" id="modeSwitch">
+    <button data-mode="car">📱 Car</button>
+    <button data-mode="cafeteria">🖥️ Cafeteria</button>
+    <button data-mode="door">🚪 Door</button>
+  </div>
+  <div class="header-right">
+    <span class="pending-note" id="pendingNote"></span>
+    <button id="resetBtn" title="Reset system" style="background:rgba(255,255,255,0.15);border:none;color:#fff;border-radius:8px;padding:7px 11px;font-size:13px;font-weight:700;">↺ Reset</button>
+    <div class="dot" id="connDot"></div>
+  </div>
+</header>
+
+<!-- ===== CAR VIEW ===== -->
+<div class="view" id="view-car">
+  <div class="status-strip" id="statusStrip"></div>
+  <div class="search-wrap">
+    <input id="search" type="text" placeholder="Type a name..." autocomplete="off" autocapitalize="words">
+  </div>
+  <div id="carMain">
+    <div id="resultsContainer"></div>
+  </div>
+  <div class="batch-bar" id="batchBar">
+    <span id="batchCount">0 selected</span>
+    <button id="batchSend">Send Group</button>
+  </div>
+</div>
+
+<!-- ===== CAFETERIA VIEW ===== -->
+<div class="view" id="view-cafeteria">
+  <div class="cafe-bar"><span id="dateLabel"></span></div>
+  <div class="board">
+    <div class="column"><div class="cards" id="leftCards"></div></div>
+    <div class="column"><div class="cards" id="rightCards"></div></div>
+  </div>
+</div>
+
+<!-- ===== DOOR VIEW ===== -->
+<div class="view" id="view-door">
+  <div id="doorList"></div>
+</div>
+
+<!-- ===== RESET CONFIRMATION MODAL ===== -->
+<div id="resetOverlay" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.55); z-index:100; align-items:center; justify-content:center;">
+  <div style="background:#fff; border-radius:18px; padding:28px 24px; max-width:320px; width:90%; text-align:center; box-shadow:0 8px 32px rgba(0,0,0,0.25);">
+    <div style="font-size:36px; margin-bottom:12px;">⚠️</div>
+    <p style="font-size:18px; font-weight:800; color:var(--text); margin:0 0 8px;">Reset the system?</p>
+    <p style="font-size:14px; color:var(--muted); margin:0 0 24px;">This clears all screens on all devices. The pickup log in the sheet is not affected.</p>
+    <div style="display:flex; gap:10px;">
+      <button id="resetCancel" style="flex:1; padding:14px; border-radius:10px; border:2px solid var(--line); background:#fff; font-size:15px; font-weight:700; color:var(--text);">Cancel</button>
+      <button id="resetConfirm" style="flex:1; padding:14px; border-radius:10px; border:none; background:var(--danger); color:#fff; font-size:15px; font-weight:700;">Yes, Reset</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+  var APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbwv5EzBzqiEVIs3lkphhu42KdEab6YSY8Ff1NOHcBpQzM1i5gvd6RUV-k2z6FvAmoOe/exec';
+  var POLL_MS = 3000;
+  var FLASH_MS = 8000;
+  var DOOR_UNDO_MS = 7000;
+
+  var mode = localStorage.getItem('byecar_mode') || 'car';
+  var lastQueue = JSON.parse(localStorage.getItem('byecar_lastQueue') || '[]');
+
+  function escapeHtml(s) {
+    return (s || '').replace(/[&<>"']/g, function (c) {
+      return { '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c];
+    });
+  }
+  function formatTime(ts) {
+    var t = new Date(ts);
+    var hh = t.getHours(), mm = t.getMinutes();
+    var ampm = hh >= 12 ? 'PM' : 'AM';
+    hh = hh % 12; if (hh === 0) hh = 12;
+    var mmStr = mm < 10 ? '0' + mm : mm;
+    return hh + ':' + mmStr + ' ' + ampm;
+  }
+  function setOnline(isOnline) {
+    document.getElementById('connDot').classList.toggle('offline', !isOnline);
+  }
+  function toast(msg) {
+    var t = document.getElementById('toast');
+    t.textContent = msg;
+    t.classList.add('show');
+    setTimeout(function () { t.classList.remove('show'); }, 1600);
+  }
+
+  /* ---------- Shared chime (Web Audio, original two-note tone) ---------- */
+  var audioCtx = null;
+  function getAudioCtx() {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    return audioCtx;
+  }
+  function tone(ctx, freq, startTime, duration) {
+    var osc = ctx.createOscillator();
+    var gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.value = freq;
+    gain.gain.setValueAtTime(0.0001, startTime);
+    gain.gain.exponentialRampToValueAtTime(0.35, startTime + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, startTime + duration);
+    osc.connect(gain); gain.connect(ctx.destination);
+    osc.start(startTime); osc.stop(startTime + duration + 0.02);
+  }
+  function playChime() {
+    var ctx = getAudioCtx();
+    var now = ctx.currentTime;
+    [0, 0.097].forEach(function(offset) {
+      tone(ctx, 660, now + offset, 0.1);
+      tone(ctx, 880, now + offset + 0.1, 0.1);
+      tone(ctx, 1100, now + offset + 0.2, 0.16);
+    });
+  }
+  function speak(text) {
+    if (!window.speechSynthesis) return;
+    var u = new SpeechSynthesisUtterance(text);
+    u.rate = 0.95;
+    window.speechSynthesis.speak(u);
+  }
+
+  /* ====================================================================
+     MODE SWITCHING
+  ==================================================================== */
+  function applyMode() {
+    document.querySelectorAll('.view').forEach(function (v) { v.classList.remove('active'); });
+    document.getElementById('view-' + mode).classList.add('active');
+    document.querySelectorAll('#modeSwitch button').forEach(function (b) {
+      b.classList.toggle('active', b.getAttribute('data-mode') === mode);
+    });
+    localStorage.setItem('byecar_mode', mode);
+    if (mode === 'cafeteria') renderBoard(lastQueue);
+    if (mode === 'door') renderDoor(lastQueue);
+    if (mode === 'car') { renderStrip(); searchInput.focus(); }
+  }
+
+  document.getElementById('modeSwitch').addEventListener('click', function (e) {
+    var btn = e.target.closest('button');
+    if (!btn) return;
+    mode = btn.getAttribute('data-mode');
+    applyMode();
+    poll();
+  });
+
+  /* ====================================================================
+     CAR VIEW
+  ==================================================================== */
+  var roster = [];
+  var selected = {};
+  var pendingSends = JSON.parse(localStorage.getItem('byecar_pending') || '[]');
+  var recentSent = JSON.parse(localStorage.getItem('byecar_recentSent') || '[]'); // [{id, full, sentAt}]
+
+  var searchInput = document.getElementById('search');
+  var resultsContainer = document.getElementById('resultsContainer');
+  var batchBar = document.getElementById('batchBar');
+  var batchCount = document.getElementById('batchCount');
+  var pendingNote = document.getElementById('pendingNote');
+  var statusStrip = document.getElementById('statusStrip');
+
+  function refreshPendingNote() {
+    pendingNote.textContent = pendingSends.length ? pendingSends.length + ' waiting to send...' : '';
+  }
+  function savePending() {
+    localStorage.setItem('byecar_pending', JSON.stringify(pendingSends));
+    refreshPendingNote();
+  }
+  function saveRecentSent() { localStorage.setItem('byecar_recentSent', JSON.stringify(recentSent)); }
+
+  function renderStrip() {
+    // Drop entries whose real ID is no longer in the server queue (departed/cleared)
+    recentSent = recentSent.filter(function (item) {
+      if (item.id.indexOf('tmp_') === 0) return true; // still sending, keep
+      return !!lastQueue.find(function (q) { return q.id === item.id; });
+    });
+    saveRecentSent();
+    if (!recentSent.length) { statusStrip.innerHTML = ''; return; }
+    var n = recentSent.length;
+    statusStrip.innerHTML = recentSent.map(function (item, i) {
+      var label = n - i;
+      var live = lastQueue.find(function (q) { return q.id === item.id; });
+      var announced = live && live.announcedAt;
+      var stateHtml = announced
+        ? '<span class="state called">Called ' + formatTime(live.announcedAt) + '</span>'
+        : '<span class="state sending">Sending...</span>';
+      return '<div class="status-row"><div class="num">' + label + '</div>' +
+        '<div class="name">' + escapeHtml(item.full) + '</div>' + stateHtml + '</div>';
+    }).join('');
+  }
+
+  function genTempId() { return 'tmp_' + Math.random().toString(36).slice(2) + Date.now(); }
+
+  function loadRoster() {
+    var cached = localStorage.getItem('byecar_roster');
+    if (cached) { try { roster = JSON.parse(cached); } catch (e) { roster = []; } }
+    fetch(APPS_SCRIPT_URL + '?action=roster')
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        roster = data.roster || [];
+        localStorage.setItem('byecar_roster', JSON.stringify(roster));
+        setOnline(true);
+      })
+      .catch(function () { setOnline(false); });
+  }
+
+  function matchesQuery(student, q) {
+    var hay = (student.first + ' ' + student.last + ' ' + student.full).toLowerCase();
+    return hay.indexOf(q) !== -1;
+  }
+
+  function renderResults() {
+    var raw = searchInput.value.trim();
+    var q = raw.toLowerCase();
+    if (!q) { resultsContainer.innerHTML = '<div class="hint">Start typing a name...</div>'; return; }
+
+    var found = roster.filter(function (s) { return matchesQuery(s, q); });
+
+    if (!found.length) {
+      resultsContainer.innerHTML = '<button class="no-match-link" id="noMatchSend">Click here to send "' + escapeHtml(raw) + '" as typed</button>';
+      var btn = document.getElementById('noMatchSend');
+      btn.addEventListener('click', function () {
+        var student = { first: raw, last: '', full: raw, adhoc: true, grade: '' };
+        sendCall([student]);
+      });
+      return;
+    }
+
+    var shown = found.slice(0, 8);
+    resultsContainer.innerHTML = shown.map(function (s, i) {
+      var key = s.first + '|' + s.last;
+      var checked = !!selected[key];
+      return (
+        '<div class="result-row" data-key="' + escapeHtml(key) + '" data-idx="' + i + '">' +
+          '<div class="checkbox' + (checked ? ' checked' : '') + '" data-action="check">' + (checked ? '✓' : '') + '</div>' +
+          '<div class="name-area" data-action="send">' +
+            '<div class="full">' + escapeHtml(s.full) + '</div>' +
+            '<div class="grade">Grade ' + escapeHtml(String(s.grade || '')) + '</div>' +
+          '</div>' +
+          '<button class="send-now" data-action="send">Send</button>' +
+        '</div>'
+      );
+    }).join('') + (found.length > shown.length
+      ? '<div class="more-matches">' + (found.length - shown.length) + ' more match' + (found.length - shown.length === 1 ? '' : 'es') + ' — keep typing</div>'
+      : '');
+
+    window.__lastShown = shown;
+  }
+
+  resultsContainer.addEventListener('click', function (e) {
+    var actionEl = e.target.closest('[data-action]');
+    if (!actionEl) return;
+    var row = e.target.closest('.result-row');
+    var idx = parseInt(row.getAttribute('data-idx'), 10);
+    var student = window.__lastShown[idx];
+    var key = student.first + '|' + student.last;
+
+    if (actionEl.getAttribute('data-action') === 'check') {
+      if (selected[key]) { delete selected[key]; } else { selected[key] = student; }
+      renderResults();
+      updateBatchBar();
+    } else {
+      sendCall([student]);
+      row.classList.add('flash');
+    }
+  });
+
+  function updateBatchBar() {
+    var keys = Object.keys(selected);
+    if (keys.length > 0) { batchBar.classList.add('show'); batchCount.textContent = keys.length + ' selected'; }
+    else { batchBar.classList.remove('show'); }
+  }
+
+  document.getElementById('batchSend').addEventListener('click', function () {
+    var students = Object.keys(selected).map(function (k) { return selected[k]; });
+    if (!students.length) return;
+    sendCall(students);
+    selected = {};
+    updateBatchBar();
+    renderResults();
+  });
+
+  searchInput.addEventListener('input', renderResults);
+
+  /* ---------- Sending ---------- */
+  function sendCall(students) {
+    var clientIds = students.map(function () { return genTempId(); });
+    students.forEach(function (s, i) {
+      recentSent.push({ id: clientIds[i], full: s.full, sentAt: Date.now() });
+    });
+    recentSent = recentSent.slice(-3);
+    saveRecentSent();
+    renderStrip();
+    toast(students.length > 1 ? 'Sent ' + students.length + ' students' : 'Sent ' + students[0].full);
+    searchInput.value = '';
+    renderResults();
+
+    var payload = {
+      action: 'call',
+      clientIds: clientIds,
+      students: students.map(function (s) {
+        return { first: s.first, last: s.last, full: s.full, adhoc: !!s.adhoc };
+      })
+    };
+    queueOrSend(payload);
+  }
+
+  function queueOrSend(payload) { pendingSends.push(payload); savePending(); flushPending(); }
+
+  function flushPending() {
+    if (!pendingSends.length) return;
+    var next = pendingSends[0];
+    fetch(APPS_SCRIPT_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify(next)
+    }).then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (next.action === 'call' && next.clientIds && data.added) {
+          data.added.forEach(function (entry, i) {
+            var tempId = next.clientIds[i];
+            var match = recentSent.find(function (r) { return r.id === tempId; });
+            if (match) match.id = entry.id;
+          });
+          saveRecentSent();
+          renderStrip();
+        }
+        pendingSends.shift();
+        savePending();
+        setOnline(true);
+        if (pendingSends.length) flushPending();
+      })
+      .catch(function () { setOnline(false); });
+  }
+
+  /* ====================================================================
+     CAFETERIA VIEW — single 14-slot board, split into two columns
+  ==================================================================== */
+  document.getElementById('dateLabel').textContent = new Date().toLocaleDateString(undefined, {
+    weekday: 'short', month: 'short', day: 'numeric'
+  });
+
+  var announcedIds = JSON.parse(localStorage.getItem('byecar_announced') || '[]');
+  var flashingIds = {};
+  var announceQueue = [];
+  var announcing = false;
+
+  function queueAnnouncement(ids) { announceQueue.push(ids); processAnnounceQueue(); }
+  function processAnnounceQueue() {
+    if (announcing || !announceQueue.length) return;
+    announcing = true;
+    var ids = announceQueue.shift();
+    var isBatch = ids.length > 1;
+    playChime();
+    setTimeout(function () {
+      speak(isBatch ? 'Calling for these students' : 'Calling for next student');
+      postAnnounced(ids);
+      setTimeout(function () { announcing = false; processAnnounceQueue(); }, 1400);
+    }, 400);
+  }
+  function postAnnounced(ids) {
+    fetch(APPS_SCRIPT_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({ action: 'announced', ids: ids })
+    }).catch(function () {});
+  }
+
+  function activeQueue(queue) {
+    return queue
+      .filter(function (q) { return q.status === 'called' || q.status === 'enroute'; })
+      .sort(function (a, b) { return a.ts - b.ts; });
+  }
+
+  function renderBoard(queue) {
+    var active = activeQueue(queue);
+    var left = active.slice(0, 7);
+    var right = active.slice(7);
+    renderCafeCol('leftCards', left, 1);
+    renderCafeCol('rightCards', right, 8);
+  }
+
+  function renderCafeCol(elId, items, startNum) {
+    var el = document.getElementById(elId);
+    if (!items.length) { el.innerHTML = '<div class="empty-hint">—</div>'; return; }
+    el.innerHTML = items.map(function (item, i) {
+      var status = item.status;
+      var flashClass = (status === 'called' && flashingIds[item.id]) ? ' flashing' : '';
+      return '<div class="card ' + status + flashClass + '" data-id="' + item.id + '" data-status="' + status + '">' +
+        '<div class="slot-badge">' + (startNum + i) + '</div>' +
+        '<span>' + escapeHtml(item.full) + '</span></div>';
+    }).join('');
+  }
+
+  document.querySelectorAll('#view-cafeteria .cards').forEach(function (col) {
+    col.addEventListener('click', function (e) {
+      var card = e.target.closest('.card');
+      if (!card) return;
+      var status = card.getAttribute('data-status');
+      var id = card.getAttribute('data-id');
+      if (status === 'called') postAction({ action: 'enroute', id: id });
+    });
+  });
+
+  function postAction(payload) {
+    fetch(APPS_SCRIPT_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify(payload)
+    }).then(function () { poll(); }).catch(function () { setOnline(false); });
+  }
+
+  function handleNewCalls(queue) {
+    var newBatches = {};
+    var newSingles = [];
+    queue.forEach(function (item) {
+      if (item.status !== 'called') return;
+      if (announcedIds.indexOf(item.id) !== -1) return;
+      announcedIds.push(item.id);
+      flashingIds[item.id] = true;
+      setTimeout(function () { delete flashingIds[item.id]; renderBoard(lastQueue); }, FLASH_MS);
+
+      if (item.batchId) {
+        if (!newBatches[item.batchId]) newBatches[item.batchId] = [];
+        newBatches[item.batchId].push(item.id);
+      } else {
+        newSingles.push(item.id);
+      }
+    });
+    var batchKeys = Object.keys(newBatches);
+    if (batchKeys.length || newSingles.length) {
+      localStorage.setItem('byecar_announced', JSON.stringify(announcedIds.slice(-500)));
+    }
+    batchKeys.forEach(function (k) { queueAnnouncement(newBatches[k]); });
+    newSingles.forEach(function (id) { queueAnnouncement([id]); });
+  }
+
+  /* ====================================================================
+     DOOR VIEW — single locked list with 7s local undo before finalizing
+  ==================================================================== */
+  var doorListEl = document.getElementById('doorList');
+  var doorPending = {}; // id -> timeout handle
+  var doorKnownStatuses = {}; // id -> last seen status, for detecting enroute transitions
+
+  function renderDoor(queue) {
+    var active = activeQueue(queue);
+    if (!active.length) { doorListEl.innerHTML = '<div class="hint">No one waiting right now.</div>'; return; }
+    doorListEl.innerHTML = active.map(function (item, i) {
+      var isPending = !!doorPending[item.id];
+      var cls = isPending ? 'pending' : item.status;
+      var tag = isPending ? 'Tap to undo' : (item.status === 'enroute' ? 'En Route' : 'Called');
+      return '<div class="door-card ' + cls + '" data-id="' + item.id + '">' +
+        '<div class="slot-badge">' + (i + 1) + '</div>' +
+        '<div class="info">' + escapeHtml(item.full) + '<span class="tag">' + tag + '</span></div></div>';
+    }).join('');
+  }
+
+  doorListEl.addEventListener('click', function (e) {
+    var card = e.target.closest('.door-card');
+    if (!card) return;
+    var id = card.getAttribute('data-id');
+
+    if (doorPending[id]) {
+      clearTimeout(doorPending[id]);
+      delete doorPending[id];
+      renderDoor(lastQueue);
+      return;
+    }
+
+    doorPending[id] = setTimeout(function () {
+      delete doorPending[id];
+      postDeparted(id);
+    }, DOOR_UNDO_MS);
+    renderDoor(lastQueue);
+  });
+
+  function postDeparted(id) {
+    fetch(APPS_SCRIPT_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({ action: 'departed', id: id })
+    }).then(function () { poll(); }).catch(function () { setOnline(false); });
+  }
+
+  /* ====================================================================
+     SHARED POLLING
+  ==================================================================== */
+  function poll() {
+    fetch(APPS_SCRIPT_URL + '?action=state')
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        setOnline(true);
+        var queue = data.queue || [];
+        if (mode === 'cafeteria') handleNewCalls(queue);
+        if (mode === 'door') {
+          // Chime when a student transitions to En Route (cafeteria just tapped them)
+          queue.forEach(function (item) {
+            var prev = doorKnownStatuses[item.id];
+            if (item.status === 'enroute' && prev && prev !== 'enroute') {
+              playChime();
+            }
+            doorKnownStatuses[item.id] = item.status;
+          });
+        }
+        lastQueue = queue;
+        localStorage.setItem('byecar_lastQueue', JSON.stringify(lastQueue));
+        if (mode === 'cafeteria') renderBoard(lastQueue);
+        if (mode === 'door') renderDoor(lastQueue);
+        if (mode === 'car') renderStrip();
+      })
+      .catch(function () { setOnline(false); });
+  }
+
+  /* ====================================================================
+     RESET
+  ==================================================================== */
+  var resetOverlay = document.getElementById('resetOverlay');
+  document.getElementById('resetBtn').addEventListener('click', function () {
+    resetOverlay.style.display = 'flex';
+  });
+  document.getElementById('resetCancel').addEventListener('click', function () {
+    resetOverlay.style.display = 'none';
+  });
+  document.getElementById('resetConfirm').addEventListener('click', function () {
+    resetOverlay.style.display = 'none';
+    // Clear all local state
+    localStorage.removeItem('byecar_lastQueue');
+    localStorage.removeItem('byecar_recentSent');
+    localStorage.removeItem('byecar_pending');
+    localStorage.removeItem('byecar_announced');
+    recentSent = [];
+    pendingSends = [];
+    announcedIds = [];
+    flashingIds = {};
+    announceQueue = [];
+    announcing = false;
+    doorPending = {};
+    doorKnownStatuses = {};
+    lastQueue = [];
+    // Tell the server to wipe the queue too
+    fetch(APPS_SCRIPT_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({ action: 'reset' })
+    }).then(function () {
+      setOnline(true);
+      renderStrip();
+      renderBoard([]);
+      renderDoor([]);
+      refreshPendingNote();
+      toast('System reset ✓');
+    }).catch(function () {
+      setOnline(false);
+      toast('Reset sent — reconnecting...');
+    });
+  });
+
+  /* ====================================================================
+     INIT
+  ==================================================================== */
+  applyMode();
+  renderResults();
+  refreshPendingNote();
+  loadRoster();
+  poll();
+  setInterval(poll, POLL_MS);
+  setInterval(flushPending, 5000);
+  window.addEventListener('online', flushPending);
+</script>
+
+</body>
+</html><!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>BMS Bye Car</title>
+<style>
+  :root {
+    --purple: #3F2167;
+    --purple-light: #6B46B0;
+    --gold: #C9A66B;
+    --cream: #FAF7F0;
+    --text: #241734;
+    --muted: #8B7FA3;
+    --muted-light: #B7ACCB;
+    --called: #E5483D;
+    --called-glow: #FF8A65;
+    --enroute: #F2B807;
+    --pending: #8B7FA3;
+    --ok: #3C9D5C;
+    --danger: #C0392B;
+    --line: #E3DCEF;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body {
+    margin: 0; padding: 0; height: 100%; width: 100%;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: var(--cream); color: var(--text);
+    overscroll-behavior: none;
+  }
+  body { display: flex; flex-direction: column; height: 100vh; min-height: 0; }
+
+  header {
+    background: var(--purple); color: #fff;
+    padding: 12px 16px; flex: 0 0 auto;
+    display: flex; align-items: center; justify-content: space-between;
+    flex-wrap: wrap; row-gap: 8px;
+  }
+  header h1 { margin: 0; font-size: 18px; font-weight: 800; letter-spacing: .3px; }
+  .mode-switch { display: flex; gap: 6px; }
+  .mode-switch button {
+    background: rgba(255,255,255,0.15); color: #fff; border: none;
+    padding: 8px 12px; border-radius: 8px; font-size: 13px; font-weight: 700;
+  }
+  .mode-switch button.active { background: var(--gold); color: var(--purple); }
+  .header-right { display: flex; align-items: center; gap: 12px; }
+  .dot { width: 11px; height: 11px; border-radius: 50%; background: var(--ok); flex: 0 0 auto; }
+  .dot.offline { background: var(--danger); }
+  .pending-note { font-size: 11px; color: var(--gold); }
+
+  .view { display: none; flex: 1; min-height: 0; flex-direction: column; }
+  .view.active { display: flex; }
+
+  /* ---------- Car view ---------- */
+  .status-strip { flex: 0 0 auto; padding: 10px 16px 0; display: flex; flex-direction: column; gap: 6px; }
+  .status-row {
+    display: flex; align-items: center; gap: 10px; background: #fff;
+    border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px;
+  }
+  .status-row .num {
+    width: 22px; height: 22px; border-radius: 50%; background: var(--purple);
+    color: #fff; font-size: 12px; font-weight: 800; display: flex; align-items: center; justify-content: center;
+    flex: 0 0 auto;
+  }
+  .status-row .name { flex: 1; font-weight: 600; font-size: 15px; }
+  .status-row .state { font-size: 12px; font-weight: 700; }
+  .status-row .state.sending { color: var(--muted); }
+  .status-row .state.called { color: var(--ok); }
+
+  .search-wrap { padding: 10px 16px; flex: 0 0 auto; display: flex; gap: 8px; }
+  #search {
+    flex: 1; min-width: 0; padding: 14px 16px; font-size: 18px; border-radius: 12px;
+    border: 2px solid var(--line); outline: none; background: #fff; color: var(--text);
+  }
+  #search:focus { border-color: var(--purple-light); }
+  #carMain { flex: 1; min-height: 0; overflow-y: auto; padding: 0 16px 16px; }
+  .hint { color: var(--muted); font-size: 14px; text-align: center; margin-top: 24px; }
+
+  .result-row {
+    display: flex; align-items: center; gap: 12px;
+    background: #fff; border: 1px solid var(--line); border-radius: 12px;
+    padding: 12px 14px; margin-bottom: 8px;
+  }
+  .result-row.flash { animation: sentFlash .5s ease; }
+  @keyframes sentFlash { 0% { background:#fff; } 40% { background:#DDF3E2; } 100% { background:#fff; } }
+
+  .checkbox {
+    width: 26px; height: 26px; border-radius: 8px; border: 2px solid var(--purple-light);
+    flex: 0 0 auto; display: flex; align-items: center; justify-content: center;
+    color: #fff; font-size: 16px; background: #fff;
+  }
+  .checkbox.checked { background: var(--purple-light); }
+
+  .name-area { flex: 1; min-height: 0; }
+  .name-area .full { font-size: 17px; font-weight: 600; }
+  .name-area .grade { font-size: 12px; color: var(--muted); }
+
+  .send-now {
+    flex: 0 0 auto; background: var(--purple); color: #fff; border: none;
+    border-radius: 10px; padding: 10px 14px; font-size: 14px; font-weight: 600;
+  }
+
+  .more-matches { text-align: center; color: var(--muted); font-size: 13px; padding: 8px 0; }
+
+  .no-match-link {
+    display: block; width: 100%; text-align: center; background: #fff;
+    border: 2px dashed var(--purple-light); color: var(--purple); border-radius: 12px;
+    padding: 16px; font-size: 15px; font-weight: 600; margin-top: 8px;
+  }
+
+  .batch-bar {
+    flex: 0 0 auto; background: var(--purple); color: #fff; padding: 12px 16px;
+    display: none; align-items: center; justify-content: space-between;
+  }
+  .batch-bar.show { display: flex; }
+  .batch-bar button {
+    background: var(--gold); color: var(--purple); border: none; border-radius: 10px;
+    padding: 10px 18px; font-weight: 700; font-size: 15px;
+  }
+
+  .toast {
+    position: fixed; top: 64px; left: 50%; transform: translateX(-50%);
+    background: var(--purple); color: #fff; padding: 10px 18px; border-radius: 999px;
+    font-size: 14px; z-index: 50; opacity: 0; transition: opacity .25s;
+    pointer-events: none; max-width: 90%; text-align: center;
+  }
+  .toast.show { opacity: 1; }
+
+  /* ---------- Cafeteria view (2-column locked board) ---------- */
+  .cafe-bar { flex: 0 0 auto; padding: 8px 24px 0; display: flex; justify-content: flex-end; color: var(--muted); font-size: 14px; }
+  .board { flex: 1; min-height: 0; display: flex; gap: 18px; padding: 12px 24px 18px; }
+  .column { flex: 1; min-height: 0; display: flex; flex-direction: column; background: rgba(255,255,255,0.5); border-radius: 18px; padding: 14px; border: 2px solid rgba(255,255,255,0.6); }
+  .cards { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
+  .card { border-radius: 14px; padding: 14px 18px; font-size: 22px; font-weight: 700; color: #fff; display: flex; align-items: center; gap: 14px; box-shadow: 0 2px 6px rgba(0,0,0,0.12); }
+  .card .slot-badge { width: 34px; height: 34px; border-radius: 50%; background: rgba(255,255,255,0.3); display: flex; align-items: center; justify-content: center; font-size: 16px; flex: 0 0 auto; }
+  .card.called { background: var(--called); cursor: pointer; }
+  .card.called.flashing { animation: pulse 0.9s infinite; }
+  @keyframes pulse { 0%, 100% { background: var(--called); transform: scale(1); } 50% { background: var(--called-glow); transform: scale(1.03); } }
+  .card.enroute { background: var(--enroute); color: #4a3900; }
+  .empty-hint { color: var(--muted-light); text-align: center; font-size: 16px; margin-top: 20px; }
+
+  /* ---------- Door view (single locked list) ---------- */
+  #doorList { flex: 1; min-height: 0; overflow-y: auto; padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
+  .door-card { border-radius: 14px; padding: 16px 18px; font-size: 20px; font-weight: 700; color: #fff; display: flex; align-items: center; gap: 14px; box-shadow: 0 2px 6px rgba(0,0,0,0.12); }
+  .door-card .slot-badge { width: 32px; height: 32px; border-radius: 50%; background: rgba(255,255,255,0.3); display: flex; align-items: center; justify-content: center; font-size: 15px; flex: 0 0 auto; }
+  .door-card .info { flex: 1; }
+  .door-card .tag { font-size: 12px; font-weight: 600; opacity: .85; text-transform: uppercase; letter-spacing: .4px; display: block; margin-top: 2px; }
+  .door-card.called { background: var(--called); }
+  .door-card.enroute { background: var(--enroute); color: #4a3900; }
+  .door-card.pending { background: var(--pending); }
+  .door-card.pending .tag { opacity: 1; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Bye Car</h1>
+  <div class="mode-switch" id="modeSwitch">
+    <button data-mode="car">📱 Car</button>
+    <button data-mode="cafeteria">🖥️ Cafeteria</button>
+    <button data-mode="door">🚪 Door</button>
+  </div>
+  <div class="header-right">
+    <span class="pending-note" id="pendingNote"></span>
+    <button id="resetBtn" title="Reset system" style="background:rgba(255,255,255,0.15);border:none;color:#fff;border-radius:8px;padding:7px 11px;font-size:13px;font-weight:700;">↺ Reset</button>
+    <div class="dot" id="connDot"></div>
+  </div>
+</header>
+
+<!-- ===== CAR VIEW ===== -->
+<div class="view" id="view-car">
+  <div class="status-strip" id="statusStrip"></div>
+  <div class="search-wrap">
+    <input id="search" type="text" placeholder="Type a name..." autocomplete="off" autocapitalize="words">
+  </div>
+  <div id="carMain">
+    <div id="resultsContainer"></div>
+  </div>
+  <div class="batch-bar" id="batchBar">
+    <span id="batchCount">0 selected</span>
+    <button id="batchSend">Send Group</button>
+  </div>
+</div>
+
+<!-- ===== CAFETERIA VIEW ===== -->
+<div class="view" id="view-cafeteria">
+  <div class="cafe-bar"><span id="dateLabel"></span></div>
+  <div class="board">
+    <div class="column"><div class="cards" id="leftCards"></div></div>
+    <div class="column"><div class="cards" id="rightCards"></div></div>
+  </div>
+</div>
+
+<!-- ===== DOOR VIEW ===== -->
+<div class="view" id="view-door">
+  <div id="doorList"></div>
+</div>
+
+<!-- ===== RESET CONFIRMATION MODAL ===== -->
+<div id="resetOverlay" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.55); z-index:100; align-items:center; justify-content:center;">
+  <div style="background:#fff; border-radius:18px; padding:28px 24px; max-width:320px; width:90%; text-align:center; box-shadow:0 8px 32px rgba(0,0,0,0.25);">
+    <div style="font-size:36px; margin-bottom:12px;">⚠️</div>
+    <p style="font-size:18px; font-weight:800; color:var(--text); margin:0 0 8px;">Reset the system?</p>
+    <p style="font-size:14px; color:var(--muted); margin:0 0 24px;">This clears all screens on all devices. The pickup log in the sheet is not affected.</p>
+    <div style="display:flex; gap:10px;">
+      <button id="resetCancel" style="flex:1; padding:14px; border-radius:10px; border:2px solid var(--line); background:#fff; font-size:15px; font-weight:700; color:var(--text);">Cancel</button>
+      <button id="resetConfirm" style="flex:1; padding:14px; border-radius:10px; border:none; background:var(--danger); color:#fff; font-size:15px; font-weight:700;">Yes, Reset</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+  var APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbwv5EzBzqiEVIs3lkphhu42KdEab6YSY8Ff1NOHcBpQzM1i5gvd6RUV-k2z6FvAmoOe/exec';
+  var POLL_MS = 3000;
+  var FLASH_MS = 8000;
+  var DOOR_UNDO_MS = 7000;
+
+  var mode = localStorage.getItem('byecar_mode') || 'car';
+  var lastQueue = JSON.parse(localStorage.getItem('byecar_lastQueue') || '[]');
+
+  function escapeHtml(s) {
+    return (s || '').replace(/[&<>"']/g, function (c) {
+      return { '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c];
+    });
+  }
+  function formatTime(ts) {
+    var t = new Date(ts);
+    var hh = t.getHours(), mm = t.getMinutes();
+    var ampm = hh >= 12 ? 'PM' : 'AM';
+    hh = hh % 12; if (hh === 0) hh = 12;
+    var mmStr = mm < 10 ? '0' + mm : mm;
+    return hh + ':' + mmStr + ' ' + ampm;
+  }
+  function setOnline(isOnline) {
+    document.getElementById('connDot').classList.toggle('offline', !isOnline);
+  }
+  function toast(msg) {
+    var t = document.getElementById('toast');
+    t.textContent = msg;
+    t.classList.add('show');
+    setTimeout(function () { t.classList.remove('show'); }, 1600);
+  }
+
+  /* ---------- Shared chime (Web Audio, original two-note tone) ---------- */
+  var audioCtx = null;
+  function getAudioCtx() {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    return audioCtx;
+  }
+  function tone(ctx, freq, startTime, duration) {
+    var osc = ctx.createOscillator();
+    var gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.value = freq;
+    gain.gain.setValueAtTime(0.0001, startTime);
+    gain.gain.exponentialRampToValueAtTime(0.35, startTime + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, startTime + duration);
+    osc.connect(gain); gain.connect(ctx.destination);
+    osc.start(startTime); osc.stop(startTime + duration + 0.02);
+  }
+  function playChime() {
+    var ctx = getAudioCtx();
+    var now = ctx.currentTime;
+    [0, 0.097].forEach(function(offset) {
+      tone(ctx, 660, now + offset, 0.1);
+      tone(ctx, 880, now + offset + 0.1, 0.1);
+      tone(ctx, 1100, now + offset + 0.2, 0.16);
+    });
+  }
+  function speak(text) {
+    if (!window.speechSynthesis) return;
+    var u = new SpeechSynthesisUtterance(text);
+    u.rate = 0.95;
+    window.speechSynthesis.speak(u);
+  }
+
+  /* ====================================================================
+     MODE SWITCHING
+  ==================================================================== */
+  function applyMode() {
+    document.querySelectorAll('.view').forEach(function (v) { v.classList.remove('active'); });
+    document.getElementById('view-' + mode).classList.add('active');
+    document.querySelectorAll('#modeSwitch button').forEach(function (b) {
+      b.classList.toggle('active', b.getAttribute('data-mode') === mode);
+    });
+    localStorage.setItem('byecar_mode', mode);
+    if (mode === 'cafeteria') renderBoard(lastQueue);
+    if (mode === 'door') renderDoor(lastQueue);
+    if (mode === 'car') { renderStrip(); searchInput.focus(); }
+  }
+
+  document.getElementById('modeSwitch').addEventListener('click', function (e) {
+    var btn = e.target.closest('button');
+    if (!btn) return;
+    mode = btn.getAttribute('data-mode');
+    applyMode();
+    poll();
+  });
+
+  /* ====================================================================
+     CAR VIEW
+  ==================================================================== */
+  var roster = [];
+  var selected = {};
+  var pendingSends = JSON.parse(localStorage.getItem('byecar_pending') || '[]');
+  var recentSent = JSON.parse(localStorage.getItem('byecar_recentSent') || '[]'); // [{id, full, sentAt}]
+
+  var searchInput = document.getElementById('search');
+  var resultsContainer = document.getElementById('resultsContainer');
+  var batchBar = document.getElementById('batchBar');
+  var batchCount = document.getElementById('batchCount');
+  var pendingNote = document.getElementById('pendingNote');
+  var statusStrip = document.getElementById('statusStrip');
+
+  function refreshPendingNote() {
+    pendingNote.textContent = pendingSends.length ? pendingSends.length + ' waiting to send...' : '';
+  }
+  function savePending() {
+    localStorage.setItem('byecar_pending', JSON.stringify(pendingSends));
+    refreshPendingNote();
+  }
+  function saveRecentSent() { localStorage.setItem('byecar_recentSent', JSON.stringify(recentSent)); }
+
+  function renderStrip() {
+    // Drop entries whose real ID is no longer in the server queue (departed/cleared)
+    recentSent = recentSent.filter(function (item) {
+      if (item.id.indexOf('tmp_') === 0) return true; // still sending, keep
+      return !!lastQueue.find(function (q) { return q.id === item.id; });
+    });
+    saveRecentSent();
+    if (!recentSent.length) { statusStrip.innerHTML = ''; return; }
+    var n = recentSent.length;
+    statusStrip.innerHTML = recentSent.map(function (item, i) {
+      var label = n - i;
+      var live = lastQueue.find(function (q) { return q.id === item.id; });
+      var announced = live && live.announcedAt;
+      var stateHtml = announced
+        ? '<span class="state called">Called ' + formatTime(live.announcedAt) + '</span>'
+        : '<span class="state sending">Sending...</span>';
+      return '<div class="status-row"><div class="num">' + label + '</div>' +
+        '<div class="name">' + escapeHtml(item.full) + '</div>' + stateHtml + '</div>';
+    }).join('');
+  }
+
+  function genTempId() { return 'tmp_' + Math.random().toString(36).slice(2) + Date.now(); }
+
+  function loadRoster() {
+    var cached = localStorage.getItem('byecar_roster');
+    if (cached) { try { roster = JSON.parse(cached); } catch (e) { roster = []; } }
+    fetch(APPS_SCRIPT_URL + '?action=roster')
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        roster = data.roster || [];
+        localStorage.setItem('byecar_roster', JSON.stringify(roster));
+        setOnline(true);
+      })
+      .catch(function () { setOnline(false); });
+  }
+
+  function matchesQuery(student, q) {
+    var hay = (student.first + ' ' + student.last + ' ' + student.full).toLowerCase();
+    return hay.indexOf(q) !== -1;
+  }
+
+  function renderResults() {
+    var raw = searchInput.value.trim();
+    var q = raw.toLowerCase();
+    if (!q) { resultsContainer.innerHTML = '<div class="hint">Start typing a name...</div>'; return; }
+
+    var found = roster.filter(function (s) { return matchesQuery(s, q); });
+
+    if (!found.length) {
+      resultsContainer.innerHTML = '<button class="no-match-link" id="noMatchSend">Click here to send "' + escapeHtml(raw) + '" as typed</button>';
+      var btn = document.getElementById('noMatchSend');
+      btn.addEventListener('click', function () {
+        var student = { first: raw, last: '', full: raw, adhoc: true, grade: '' };
+        sendCall([student]);
+      });
+      return;
+    }
+
+    var shown = found.slice(0, 8);
+    resultsContainer.innerHTML = shown.map(function (s, i) {
+      var key = s.first + '|' + s.last;
+      var checked = !!selected[key];
+      return (
+        '<div class="result-row" data-key="' + escapeHtml(key) + '" data-idx="' + i + '">' +
+          '<div class="checkbox' + (checked ? ' checked' : '') + '" data-action="check">' + (checked ? '✓' : '') + '</div>' +
+          '<div class="name-area" data-action="send">' +
+            '<div class="full">' + escapeHtml(s.full) + '</div>' +
+            '<div class="grade">Grade ' + escapeHtml(String(s.grade || '')) + '</div>' +
+          '</div>' +
+          '<button class="send-now" data-action="send">Send</button>' +
+        '</div>'
+      );
+    }).join('') + (found.length > shown.length
+      ? '<div class="more-matches">' + (found.length - shown.length) + ' more match' + (found.length - shown.length === 1 ? '' : 'es') + ' — keep typing</div>'
+      : '');
+
+    window.__lastShown = shown;
+  }
+
+  resultsContainer.addEventListener('click', function (e) {
+    var actionEl = e.target.closest('[data-action]');
+    if (!actionEl) return;
+    var row = e.target.closest('.result-row');
+    var idx = parseInt(row.getAttribute('data-idx'), 10);
+    var student = window.__lastShown[idx];
+    var key = student.first + '|' + student.last;
+
+    if (actionEl.getAttribute('data-action') === 'check') {
+      if (selected[key]) { delete selected[key]; } else { selected[key] = student; }
+      renderResults();
+      updateBatchBar();
+    } else {
+      sendCall([student]);
+      row.classList.add('flash');
+    }
+  });
+
+  function updateBatchBar() {
+    var keys = Object.keys(selected);
+    if (keys.length > 0) { batchBar.classList.add('show'); batchCount.textContent = keys.length + ' selected'; }
+    else { batchBar.classList.remove('show'); }
+  }
+
+  document.getElementById('batchSend').addEventListener('click', function () {
+    var students = Object.keys(selected).map(function (k) { return selected[k]; });
+    if (!students.length) return;
+    sendCall(students);
+    selected = {};
+    updateBatchBar();
+    renderResults();
+  });
+
+  searchInput.addEventListener('input', renderResults);
+
+  /* ---------- Sending ---------- */
+  function sendCall(students) {
+    var clientIds = students.map(function () { return genTempId(); });
+    students.forEach(function (s, i) {
+      recentSent.push({ id: clientIds[i], full: s.full, sentAt: Date.now() });
+    });
+    recentSent = recentSent.slice(-3);
+    saveRecentSent();
+    renderStrip();
+    toast(students.length > 1 ? 'Sent ' + students.length + ' students' : 'Sent ' + students[0].full);
+    searchInput.value = '';
+    renderResults();
+
+    var payload = {
+      action: 'call',
+      clientIds: clientIds,
+      students: students.map(function (s) {
+        return { first: s.first, last: s.last, full: s.full, adhoc: !!s.adhoc };
+      })
+    };
+    queueOrSend(payload);
+  }
+
+  function queueOrSend(payload) { pendingSends.push(payload); savePending(); flushPending(); }
+
+  function flushPending() {
+    if (!pendingSends.length) return;
+    var next = pendingSends[0];
+    fetch(APPS_SCRIPT_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify(next)
+    }).then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (next.action === 'call' && next.clientIds && data.added) {
+          data.added.forEach(function (entry, i) {
+            var tempId = next.clientIds[i];
+            var match = recentSent.find(function (r) { return r.id === tempId; });
+            if (match) match.id = entry.id;
+          });
+          saveRecentSent();
+          renderStrip();
+        }
+        pendingSends.shift();
+        savePending();
+        setOnline(true);
+        if (pendingSends.length) flushPending();
+      })
+      .catch(function () { setOnline(false); });
+  }
+
+  /* ====================================================================
+     CAFETERIA VIEW — single 14-slot board, split into two columns
+  ==================================================================== */
+  document.getElementById('dateLabel').textContent = new Date().toLocaleDateString(undefined, {
+    weekday: 'short', month: 'short', day: 'numeric'
+  });
+
+  var announcedIds = JSON.parse(localStorage.getItem('byecar_announced') || '[]');
+  var flashingIds = {};
+  var announceQueue = [];
+  var announcing = false;
+
+  function queueAnnouncement(ids) { announceQueue.push(ids); processAnnounceQueue(); }
+  function processAnnounceQueue() {
+    if (announcing || !announceQueue.length) return;
+    announcing = true;
+    var ids = announceQueue.shift();
+    var isBatch = ids.length > 1;
+    playChime();
+    setTimeout(function () {
+      speak(isBatch ? 'Calling for these students' : 'Calling for next student');
+      postAnnounced(ids);
+      setTimeout(function () { announcing = false; processAnnounceQueue(); }, 1400);
+    }, 400);
+  }
+  function postAnnounced(ids) {
+    fetch(APPS_SCRIPT_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({ action: 'announced', ids: ids })
+    }).catch(function () {});
+  }
+
+  function activeQueue(queue) {
+    return queue
+      .filter(function (q) { return q.status === 'called' || q.status === 'enroute'; })
+      .sort(function (a, b) { return a.ts - b.ts; });
+  }
+
+  function renderBoard(queue) {
+    var active = activeQueue(queue);
+    var left = active.slice(0, 7);
+    var right = active.slice(7);
+    renderCafeCol('leftCards', left, 1);
+    renderCafeCol('rightCards', right, 8);
+  }
+
+  function renderCafeCol(elId, items, startNum) {
+    var el = document.getElementById(elId);
+    if (!items.length) { el.innerHTML = '<div class="empty-hint">—</div>'; return; }
+    el.innerHTML = items.map(function (item, i) {
+      var status = item.status;
+      var flashClass = (status === 'called' && flashingIds[item.id]) ? ' flashing' : '';
+      return '<div class="card ' + status + flashClass + '" data-id="' + item.id + '" data-status="' + status + '">' +
+        '<div class="slot-badge">' + (startNum + i) + '</div>' +
+        '<span>' + escapeHtml(item.full) + '</span></div>';
+    }).join('');
+  }
+
+  document.querySelectorAll('#view-cafeteria .cards').forEach(function (col) {
+    col.addEventListener('click', function (e) {
+      var card = e.target.closest('.card');
+      if (!card) return;
+      var status = card.getAttribute('data-status');
+      var id = card.getAttribute('data-id');
+      if (status === 'called') postAction({ action: 'enroute', id: id });
+    });
+  });
+
+  function postAction(payload) {
+    fetch(APPS_SCRIPT_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify(payload)
+    }).then(function () { poll(); }).catch(function () { setOnline(false); });
+  }
+
+  function handleNewCalls(queue) {
+    var newBatches = {};
+    var newSingles = [];
+    queue.forEach(function (item) {
+      if (item.status !== 'called') return;
+      if (announcedIds.indexOf(item.id) !== -1) return;
+      announcedIds.push(item.id);
+      flashingIds[item.id] = true;
+      setTimeout(function () { delete flashingIds[item.id]; renderBoard(lastQueue); }, FLASH_MS);
+
+      if (item.batchId) {
+        if (!newBatches[item.batchId]) newBatches[item.batchId] = [];
+        newBatches[item.batchId].push(item.id);
+      } else {
+        newSingles.push(item.id);
+      }
+    });
+    var batchKeys = Object.keys(newBatches);
+    if (batchKeys.length || newSingles.length) {
+      localStorage.setItem('byecar_announced', JSON.stringify(announcedIds.slice(-500)));
+    }
+    batchKeys.forEach(function (k) { queueAnnouncement(newBatches[k]); });
+    newSingles.forEach(function (id) { queueAnnouncement([id]); });
+  }
+
+  /* ====================================================================
+     DOOR VIEW — single locked list with 7s local undo before finalizing
+  ==================================================================== */
+  var doorListEl = document.getElementById('doorList');
+  var doorPending = {}; // id -> timeout handle
+  var doorKnownStatuses = {}; // id -> last seen status, for detecting enroute transitions
+
+  function renderDoor(queue) {
+    var active = activeQueue(queue);
+    if (!active.length) { doorListEl.innerHTML = '<div class="hint">No one waiting right now.</div>'; return; }
+    doorListEl.innerHTML = active.map(function (item, i) {
+      var isPending = !!doorPending[item.id];
+      var cls = isPending ? 'pending' : item.status;
+      var tag = isPending ? 'Tap to undo' : (item.status === 'enroute' ? 'En Route' : 'Called');
+      return '<div class="door-card ' + cls + '" data-id="' + item.id + '">' +
+        '<div class="slot-badge">' + (i + 1) + '</div>' +
+        '<div class="info">' + escapeHtml(item.full) + '<span class="tag">' + tag + '</span></div></div>';
+    }).join('');
+  }
+
+  doorListEl.addEventListener('click', function (e) {
+    var card = e.target.closest('.door-card');
+    if (!card) return;
+    var id = card.getAttribute('data-id');
+
+    if (doorPending[id]) {
+      clearTimeout(doorPending[id]);
+      delete doorPending[id];
+      renderDoor(lastQueue);
+      return;
+    }
+
+    doorPending[id] = setTimeout(function () {
+      delete doorPending[id];
+      postDeparted(id);
+    }, DOOR_UNDO_MS);
+    renderDoor(lastQueue);
+  });
+
+  function postDeparted(id) {
+    fetch(APPS_SCRIPT_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({ action: 'departed', id: id })
+    }).then(function () { poll(); }).catch(function () { setOnline(false); });
+  }
+
+  /* ====================================================================
+     SHARED POLLING
+  ==================================================================== */
+  function poll() {
+    fetch(APPS_SCRIPT_URL + '?action=state')
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        setOnline(true);
+        var queue = data.queue || [];
+        if (mode === 'cafeteria') handleNewCalls(queue);
+        if (mode === 'door') {
+          // Chime when a student transitions to En Route (cafeteria just tapped them)
+          queue.forEach(function (item) {
+            var prev = doorKnownStatuses[item.id];
+            if (item.status === 'enroute' && prev && prev !== 'enroute') {
+              playChime();
+            }
+            doorKnownStatuses[item.id] = item.status;
+          });
+        }
+        lastQueue = queue;
+        localStorage.setItem('byecar_lastQueue', JSON.stringify(lastQueue));
+        if (mode === 'cafeteria') renderBoard(lastQueue);
+        if (mode === 'door') renderDoor(lastQueue);
+        if (mode === 'car') renderStrip();
+      })
+      .catch(function () { setOnline(false); });
+  }
+
+  /* ====================================================================
+     RESET
+  ==================================================================== */
+  var resetOverlay = document.getElementById('resetOverlay');
+  document.getElementById('resetBtn').addEventListener('click', function () {
+    resetOverlay.style.display = 'flex';
+  });
+  document.getElementById('resetCancel').addEventListener('click', function () {
+    resetOverlay.style.display = 'none';
+  });
+  document.getElementById('resetConfirm').addEventListener('click', function () {
+    resetOverlay.style.display = 'none';
+    // Clear all local state
+    localStorage.removeItem('byecar_lastQueue');
+    localStorage.removeItem('byecar_recentSent');
+    localStorage.removeItem('byecar_pending');
+    localStorage.removeItem('byecar_announced');
+    recentSent = [];
+    pendingSends = [];
+    announcedIds = [];
+    flashingIds = {};
+    announceQueue = [];
+    announcing = false;
+    doorPending = {};
+    doorKnownStatuses = {};
+    lastQueue = [];
+    // Tell the server to wipe the queue too
+    fetch(APPS_SCRIPT_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({ action: 'reset' })
+    }).then(function () {
+      setOnline(true);
+      renderStrip();
+      renderBoard([]);
+      renderDoor([]);
+      refreshPendingNote();
+      toast('System reset ✓');
+    }).catch(function () {
+      setOnline(false);
+      toast('Reset sent — reconnecting...');
+    });
+  });
+
+  /* ====================================================================
+     INIT
+  ==================================================================== */
+  applyMode();
+  renderResults();
+  refreshPendingNote();
+  loadRoster();
+  poll();
+  setInterval(poll, POLL_MS);
+  setInterval(flushPending, 5000);
+  window.addEventListener('online', flushPending);
+</script>
+
+</body>
+</html><!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>BMS Bye Car</title>
+<style>
+  :root {
+    --purple: #3F2167;
+    --purple-light: #6B46B0;
+    --gold: #C9A66B;
+    --cream: #FAF7F0;
+    --text: #241734;
+    --muted: #8B7FA3;
+    --muted-light: #B7ACCB;
+    --called: #E5483D;
+    --called-glow: #FF8A65;
+    --enroute: #F2B807;
+    --pending: #8B7FA3;
+    --ok: #3C9D5C;
+    --danger: #C0392B;
+    --line: #E3DCEF;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body {
+    margin: 0; padding: 0; height: 100%; width: 100%;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: var(--cream); color: var(--text);
+    overscroll-behavior: none;
+  }
+  body { display: flex; flex-direction: column; height: 100vh; min-height: 0; }
+
+  header {
+    background: var(--purple); color: #fff;
+    padding: 12px 16px; flex: 0 0 auto;
+    display: flex; align-items: center; justify-content: space-between;
+    flex-wrap: wrap; row-gap: 8px;
+  }
+  header h1 { margin: 0; font-size: 18px; font-weight: 800; letter-spacing: .3px; }
+  .mode-switch { display: flex; gap: 6px; }
+  .mode-switch button {
+    background: rgba(255,255,255,0.15); color: #fff; border: none;
+    padding: 8px 12px; border-radius: 8px; font-size: 13px; font-weight: 700;
+  }
+  .mode-switch button.active { background: var(--gold); color: var(--purple); }
+  .header-right { display: flex; align-items: center; gap: 12px; }
+  .dot { width: 11px; height: 11px; border-radius: 50%; background: var(--ok); flex: 0 0 auto; }
+  .dot.offline { background: var(--danger); }
+  .pending-note { font-size: 11px; color: var(--gold); }
+
+  .view { display: none; flex: 1; min-height: 0; flex-direction: column; }
+  .view.active { display: flex; }
+
+  /* ---------- Car view ---------- */
+  .status-strip { flex: 0 0 auto; padding: 10px 16px 0; display: flex; flex-direction: column; gap: 6px; }
+  .status-row {
+    display: flex; align-items: center; gap: 10px; background: #fff;
+    border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px;
+  }
+  .status-row .num {
+    width: 22px; height: 22px; border-radius: 50%; background: var(--purple);
+    color: #fff; font-size: 12px; font-weight: 800; display: flex; align-items: center; justify-content: center;
+    flex: 0 0 auto;
+  }
+  .status-row .name { flex: 1; font-weight: 600; font-size: 15px; }
+  .status-row .state { font-size: 12px; font-weight: 700; }
+  .status-row .state.sending { color: var(--muted); }
+  .status-row .state.called { color: var(--ok); }
+
+  .search-wrap { padding: 10px 16px; flex: 0 0 auto; display: flex; gap: 8px; }
+  #search {
+    flex: 1; min-width: 0; padding: 14px 16px; font-size: 18px; border-radius: 12px;
+    border: 2px solid var(--line); outline: none; background: #fff; color: var(--text);
+  }
+  #search:focus { border-color: var(--purple-light); }
+  #carMain { flex: 1; min-height: 0; overflow-y: auto; padding: 0 16px 16px; }
+  .hint { color: var(--muted); font-size: 14px; text-align: center; margin-top: 24px; }
+
+  .result-row {
+    display: flex; align-items: center; gap: 12px;
+    background: #fff; border: 1px solid var(--line); border-radius: 12px;
+    padding: 12px 14px; margin-bottom: 8px;
+  }
+  .result-row.flash { animation: sentFlash .5s ease; }
+  @keyframes sentFlash { 0% { background:#fff; } 40% { background:#DDF3E2; } 100% { background:#fff; } }
+
+  .checkbox {
+    width: 26px; height: 26px; border-radius: 8px; border: 2px solid var(--purple-light);
+    flex: 0 0 auto; display: flex; align-items: center; justify-content: center;
+    color: #fff; font-size: 16px; background: #fff;
+  }
+  .checkbox.checked { background: var(--purple-light); }
+
+  .name-area { flex: 1; min-height: 0; }
+  .name-area .full { font-size: 17px; font-weight: 600; }
+  .name-area .grade { font-size: 12px; color: var(--muted); }
+
+  .send-now {
+    flex: 0 0 auto; background: var(--purple); color: #fff; border: none;
+    border-radius: 10px; padding: 10px 14px; font-size: 14px; font-weight: 600;
+  }
+
+  .more-matches { text-align: center; color: var(--muted); font-size: 13px; padding: 8px 0; }
+
+  .no-match-link {
+    display: block; width: 100%; text-align: center; background: #fff;
+    border: 2px dashed var(--purple-light); color: var(--purple); border-radius: 12px;
+    padding: 16px; font-size: 15px; font-weight: 600; margin-top: 8px;
+  }
+
+  .batch-bar {
+    flex: 0 0 auto; background: var(--purple); color: #fff; padding: 12px 16px;
+    display: none; align-items: center; justify-content: space-between;
+  }
+  .batch-bar.show { display: flex; }
+  .batch-bar button {
+    background: var(--gold); color: var(--purple); border: none; border-radius: 10px;
+    padding: 10px 18px; font-weight: 700; font-size: 15px;
+  }
+
+  .toast {
+    position: fixed; top: 64px; left: 50%; transform: translateX(-50%);
+    background: var(--purple); color: #fff; padding: 10px 18px; border-radius: 999px;
+    font-size: 14px; z-index: 50; opacity: 0; transition: opacity .25s;
+    pointer-events: none; max-width: 90%; text-align: center;
+  }
+  .toast.show { opacity: 1; }
+
+  /* ---------- Cafeteria view (2-column locked board) ---------- */
+  .cafe-bar { flex: 0 0 auto; padding: 8px 24px 0; display: flex; justify-content: flex-end; color: var(--muted); font-size: 14px; }
+  .board { flex: 1; min-height: 0; display: flex; gap: 18px; padding: 12px 24px 18px; }
+  .column { flex: 1; min-height: 0; display: flex; flex-direction: column; background: rgba(255,255,255,0.5); border-radius: 18px; padding: 14px; border: 2px solid rgba(255,255,255,0.6); }
+  .cards { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
+  .card { border-radius: 14px; padding: 14px 18px; font-size: 22px; font-weight: 700; color: #fff; display: flex; align-items: center; gap: 14px; box-shadow: 0 2px 6px rgba(0,0,0,0.12); }
+  .card .slot-badge { width: 34px; height: 34px; border-radius: 50%; background: rgba(255,255,255,0.3); display: flex; align-items: center; justify-content: center; font-size: 16px; flex: 0 0 auto; }
+  .card.called { background: var(--called); cursor: pointer; }
+  .card.called.flashing { animation: pulse 0.9s infinite; }
+  @keyframes pulse { 0%, 100% { background: var(--called); transform: scale(1); } 50% { background: var(--called-glow); transform: scale(1.03); } }
+  .card.enroute { background: var(--enroute); color: #4a3900; }
+  .empty-hint { color: var(--muted-light); text-align: center; font-size: 16px; margin-top: 20px; }
+
+  /* ---------- Door view (single locked list) ---------- */
+  #doorList { flex: 1; min-height: 0; overflow-y: auto; padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
+  .door-card { border-radius: 14px; padding: 16px 18px; font-size: 20px; font-weight: 700; color: #fff; display: flex; align-items: center; gap: 14px; box-shadow: 0 2px 6px rgba(0,0,0,0.12); }
+  .door-card .slot-badge { width: 32px; height: 32px; border-radius: 50%; background: rgba(255,255,255,0.3); display: flex; align-items: center; justify-content: center; font-size: 15px; flex: 0 0 auto; }
+  .door-card .info { flex: 1; }
+  .door-card .tag { font-size: 12px; font-weight: 600; opacity: .85; text-transform: uppercase; letter-spacing: .4px; display: block; margin-top: 2px; }
+  .door-card.called { background: var(--called); }
+  .door-card.enroute { background: var(--enroute); color: #4a3900; }
+  .door-card.pending { background: var(--pending); }
+  .door-card.pending .tag { opacity: 1; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Bye Car</h1>
+  <div class="mode-switch" id="modeSwitch">
+    <button data-mode="car">📱 Car</button>
+    <button data-mode="cafeteria">🖥️ Cafeteria</button>
+    <button data-mode="door">🚪 Door</button>
+  </div>
+  <div class="header-right">
+    <span class="pending-note" id="pendingNote"></span>
+    <button id="resetBtn" title="Reset system" style="background:rgba(255,255,255,0.15);border:none;color:#fff;border-radius:8px;padding:7px 11px;font-size:13px;font-weight:700;">↺ Reset</button>
+    <div class="dot" id="connDot"></div>
+  </div>
+</header>
+
+<!-- ===== CAR VIEW ===== -->
+<div class="view" id="view-car">
+  <div class="status-strip" id="statusStrip"></div>
+  <div class="search-wrap">
+    <input id="search" type="text" placeholder="Type a name..." autocomplete="off" autocapitalize="words">
+  </div>
+  <div id="carMain">
+    <div id="resultsContainer"></div>
+  </div>
+  <div class="batch-bar" id="batchBar">
+    <span id="batchCount">0 selected</span>
+    <button id="batchSend">Send Group</button>
+  </div>
+</div>
+
+<!-- ===== CAFETERIA VIEW ===== -->
+<div class="view" id="view-cafeteria">
+  <div class="cafe-bar"><span id="dateLabel"></span></div>
+  <div class="board">
+    <div class="column"><div class="cards" id="leftCards"></div></div>
+    <div class="column"><div class="cards" id="rightCards"></div></div>
+  </div>
+</div>
+
+<!-- ===== DOOR VIEW ===== -->
+<div class="view" id="view-door">
+  <div id="doorList"></div>
+</div>
+
+<!-- ===== RESET CONFIRMATION MODAL ===== -->
+<div id="resetOverlay" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.55); z-index:100; align-items:center; justify-content:center;">
+  <div style="background:#fff; border-radius:18px; padding:28px 24px; max-width:320px; width:90%; text-align:center; box-shadow:0 8px 32px rgba(0,0,0,0.25);">
+    <div style="font-size:36px; margin-bottom:12px;">⚠️</div>
+    <p style="font-size:18px; font-weight:800; color:var(--text); margin:0 0 8px;">Reset the system?</p>
+    <p style="font-size:14px; color:var(--muted); margin:0 0 24px;">This clears all screens on all devices. The pickup log in the sheet is not affected.</p>
+    <div style="display:flex; gap:10px;">
+      <button id="resetCancel" style="flex:1; padding:14px; border-radius:10px; border:2px solid var(--line); background:#fff; font-size:15px; font-weight:700; color:var(--text);">Cancel</button>
+      <button id="resetConfirm" style="flex:1; padding:14px; border-radius:10px; border:none; background:var(--danger); color:#fff; font-size:15px; font-weight:700;">Yes, Reset</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+  var APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbwv5EzBzqiEVIs3lkphhu42KdEab6YSY8Ff1NOHcBpQzM1i5gvd6RUV-k2z6FvAmoOe/exec';
+  var POLL_MS = 3000;
+  var FLASH_MS = 8000;
+  var DOOR_UNDO_MS = 7000;
+
+  var mode = localStorage.getItem('byecar_mode') || 'car';
+  var lastQueue = JSON.parse(localStorage.getItem('byecar_lastQueue') || '[]');
+
+  function escapeHtml(s) {
+    return (s || '').replace(/[&<>"']/g, function (c) {
+      return { '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c];
+    });
+  }
+  function formatTime(ts) {
+    var t = new Date(ts);
+    var hh = t.getHours(), mm = t.getMinutes();
+    var ampm = hh >= 12 ? 'PM' : 'AM';
+    hh = hh % 12; if (hh === 0) hh = 12;
+    var mmStr = mm < 10 ? '0' + mm : mm;
+    return hh + ':' + mmStr + ' ' + ampm;
+  }
+  function setOnline(isOnline) {
+    document.getElementById('connDot').classList.toggle('offline', !isOnline);
+  }
+  function toast(msg) {
+    var t = document.getElementById('toast');
+    t.textContent = msg;
+    t.classList.add('show');
+    setTimeout(function () { t.classList.remove('show'); }, 1600);
+  }
+
+  /* ---------- Shared chime (Web Audio, original two-note tone) ---------- */
+  var audioCtx = null;
+  function getAudioCtx() {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    return audioCtx;
+  }
+  function tone(ctx, freq, startTime, duration) {
+    var osc = ctx.createOscillator();
+    var gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.value = freq;
+    gain.gain.setValueAtTime(0.0001, startTime);
+    gain.gain.exponentialRampToValueAtTime(0.35, startTime + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, startTime + duration);
+    osc.connect(gain); gain.connect(ctx.destination);
+    osc.start(startTime); osc.stop(startTime + duration + 0.02);
+  }
+  function playChime() {
+    var ctx = getAudioCtx();
+    var now = ctx.currentTime;
+    [0, 0.097].forEach(function(offset) {
+      tone(ctx, 660, now + offset, 0.1);
+      tone(ctx, 880, now + offset + 0.1, 0.1);
+      tone(ctx, 1100, now + offset + 0.2, 0.16);
+    });
+  }
+  function speak(text) {
+    if (!window.speechSynthesis) return;
+    var u = new SpeechSynthesisUtterance(text);
+    u.rate = 0.95;
+    window.speechSynthesis.speak(u);
+  }
+
+  /* ====================================================================
+     MODE SWITCHING
+  ==================================================================== */
+  function applyMode() {
+    document.querySelectorAll('.view').forEach(function (v) { v.classList.remove('active'); });
+    document.getElementById('view-' + mode).classList.add('active');
+    document.querySelectorAll('#modeSwitch button').forEach(function (b) {
+      b.classList.toggle('active', b.getAttribute('data-mode') === mode);
+    });
+    localStorage.setItem('byecar_mode', mode);
+    if (mode === 'cafeteria') renderBoard(lastQueue);
+    if (mode === 'door') renderDoor(lastQueue);
+    if (mode === 'car') { renderStrip(); searchInput.focus(); }
+  }
+
+  document.getElementById('modeSwitch').addEventListener('click', function (e) {
+    var btn = e.target.closest('button');
+    if (!btn) return;
+    mode = btn.getAttribute('data-mode');
+    applyMode();
+    poll();
+  });
+
+  /* ====================================================================
+     CAR VIEW
+  ==================================================================== */
+  var roster = [];
+  var selected = {};
+  var pendingSends = JSON.parse(localStorage.getItem('byecar_pending') || '[]');
+  var recentSent = JSON.parse(localStorage.getItem('byecar_recentSent') || '[]'); // [{id, full, sentAt}]
+
+  var searchInput = document.getElementById('search');
+  var resultsContainer = document.getElementById('resultsContainer');
+  var batchBar = document.getElementById('batchBar');
+  var batchCount = document.getElementById('batchCount');
+  var pendingNote = document.getElementById('pendingNote');
+  var statusStrip = document.getElementById('statusStrip');
+
+  function refreshPendingNote() {
+    pendingNote.textContent = pendingSends.length ? pendingSends.length + ' waiting to send...' : '';
+  }
+  function savePending() {
+    localStorage.setItem('byecar_pending', JSON.stringify(pendingSends));
+    refreshPendingNote();
+  }
+  function saveRecentSent() { localStorage.setItem('byecar_recentSent', JSON.stringify(recentSent)); }
+
+  function renderStrip() {
+    // Drop entries whose real ID is no longer in the server queue (departed/cleared)
+    recentSent = recentSent.filter(function (item) {
+      if (item.id.indexOf('tmp_') === 0) return true; // still sending, keep
+      return !!lastQueue.find(function (q) { return q.id === item.id; });
+    });
+    saveRecentSent();
+    if (!recentSent.length) { statusStrip.innerHTML = ''; return; }
+    var n = recentSent.length;
+    statusStrip.innerHTML = recentSent.map(function (item, i) {
+      var label = n - i;
+      var live = lastQueue.find(function (q) { return q.id === item.id; });
+      var announced = live && live.announcedAt;
+      var stateHtml = announced
+        ? '<span class="state called">Called ' + formatTime(live.announcedAt) + '</span>'
+        : '<span class="state sending">Sending...</span>';
+      return '<div class="status-row"><div class="num">' + label + '</div>' +
+        '<div class="name">' + escapeHtml(item.full) + '</div>' + stateHtml + '</div>';
+    }).join('');
+  }
+
+  function genTempId() { return 'tmp_' + Math.random().toString(36).slice(2) + Date.now(); }
+
+  function loadRoster() {
+    var cached = localStorage.getItem('byecar_roster');
+    if (cached) { try { roster = JSON.parse(cached); } catch (e) { roster = []; } }
+    fetch(APPS_SCRIPT_URL + '?action=roster')
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        roster = data.roster || [];
+        localStorage.setItem('byecar_roster', JSON.stringify(roster));
+        setOnline(true);
+      })
+      .catch(function () { setOnline(false); });
+  }
+
+  function matchesQuery(student, q) {
+    var hay = (student.first + ' ' + student.last + ' ' + student.full).toLowerCase();
+    return hay.indexOf(q) !== -1;
+  }
+
+  function renderResults() {
+    var raw = searchInput.value.trim();
+    var q = raw.toLowerCase();
+    if (!q) { resultsContainer.innerHTML = '<div class="hint">Start typing a name...</div>'; return; }
+
+    var found = roster.filter(function (s) { return matchesQuery(s, q); });
+
+    if (!found.length) {
+      resultsContainer.innerHTML = '<button class="no-match-link" id="noMatchSend">Click here to send "' + escapeHtml(raw) + '" as typed</button>';
+      var btn = document.getElementById('noMatchSend');
+      btn.addEventListener('click', function () {
+        var student = { first: raw, last: '', full: raw, adhoc: true, grade: '' };
+        sendCall([student]);
+      });
+      return;
+    }
+
+    var shown = found.slice(0, 8);
+    resultsContainer.innerHTML = shown.map(function (s, i) {
+      var key = s.first + '|' + s.last;
+      var checked = !!selected[key];
+      return (
+        '<div class="result-row" data-key="' + escapeHtml(key) + '" data-idx="' + i + '">' +
+          '<div class="checkbox' + (checked ? ' checked' : '') + '" data-action="check">' + (checked ? '✓' : '') + '</div>' +
+          '<div class="name-area" data-action="send">' +
+            '<div class="full">' + escapeHtml(s.full) + '</div>' +
+            '<div class="grade">Grade ' + escapeHtml(String(s.grade || '')) + '</div>' +
+          '</div>' +
+          '<button class="send-now" data-action="send">Send</button>' +
+        '</div>'
+      );
+    }).join('') + (found.length > shown.length
+      ? '<div class="more-matches">' + (found.length - shown.length) + ' more match' + (found.length - shown.length === 1 ? '' : 'es') + ' — keep typing</div>'
+      : '');
+
+    window.__lastShown = shown;
+  }
+
+  resultsContainer.addEventListener('click', function (e) {
+    var actionEl = e.target.closest('[data-action]');
+    if (!actionEl) return;
+    var row = e.target.closest('.result-row');
+    var idx = parseInt(row.getAttribute('data-idx'), 10);
+    var student = window.__lastShown[idx];
+    var key = student.first + '|' + student.last;
+
+    if (actionEl.getAttribute('data-action') === 'check') {
+      if (selected[key]) { delete selected[key]; } else { selected[key] = student; }
+      renderResults();
+      updateBatchBar();
+    } else {
+      sendCall([student]);
+      row.classList.add('flash');
+    }
+  });
+
+  function updateBatchBar() {
+    var keys = Object.keys(selected);
+    if (keys.length > 0) { batchBar.classList.add('show'); batchCount.textContent = keys.length + ' selected'; }
+    else { batchBar.classList.remove('show'); }
+  }
+
+  document.getElementById('batchSend').addEventListener('click', function () {
+    var students = Object.keys(selected).map(function (k) { return selected[k]; });
+    if (!students.length) return;
+    sendCall(students);
+    selected = {};
+    updateBatchBar();
+    renderResults();
+  });
+
+  searchInput.addEventListener('input', renderResults);
+
+  /* ---------- Sending ---------- */
+  function sendCall(students) {
+    var clientIds = students.map(function () { return genTempId(); });
+    students.forEach(function (s, i) {
+      recentSent.push({ id: clientIds[i], full: s.full, sentAt: Date.now() });
+    });
+    recentSent = recentSent.slice(-3);
+    saveRecentSent();
+    renderStrip();
+    toast(students.length > 1 ? 'Sent ' + students.length + ' students' : 'Sent ' + students[0].full);
+    searchInput.value = '';
+    renderResults();
+
+    var payload = {
+      action: 'call',
+      clientIds: clientIds,
+      students: students.map(function (s) {
+        return { first: s.first, last: s.last, full: s.full, adhoc: !!s.adhoc };
+      })
+    };
+    queueOrSend(payload);
+  }
+
+  function queueOrSend(payload) { pendingSends.push(payload); savePending(); flushPending(); }
+
+  function flushPending() {
+    if (!pendingSends.length) return;
+    var next = pendingSends[0];
+    fetch(APPS_SCRIPT_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify(next)
+    }).then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (next.action === 'call' && next.clientIds && data.added) {
+          data.added.forEach(function (entry, i) {
+            var tempId = next.clientIds[i];
+            var match = recentSent.find(function (r) { return r.id === tempId; });
+            if (match) match.id = entry.id;
+          });
+          saveRecentSent();
+          renderStrip();
+        }
+        pendingSends.shift();
+        savePending();
+        setOnline(true);
+        if (pendingSends.length) flushPending();
+      })
+      .catch(function () { setOnline(false); });
+  }
+
+  /* ====================================================================
+     CAFETERIA VIEW — single 14-slot board, split into two columns
+  ==================================================================== */
+  document.getElementById('dateLabel').textContent = new Date().toLocaleDateString(undefined, {
+    weekday: 'short', month: 'short', day: 'numeric'
+  });
+
+  var announcedIds = JSON.parse(localStorage.getItem('byecar_announced') || '[]');
+  var flashingIds = {};
+  var announceQueue = [];
+  var announcing = false;
+
+  function queueAnnouncement(ids) { announceQueue.push(ids); processAnnounceQueue(); }
+  function processAnnounceQueue() {
+    if (announcing || !announceQueue.length) return;
+    announcing = true;
+    var ids = announceQueue.shift();
+    var isBatch = ids.length > 1;
+    playChime();
+    setTimeout(function () {
+      speak(isBatch ? 'Calling for these students' : 'Calling for next student');
+      postAnnounced(ids);
+      setTimeout(function () { announcing = false; processAnnounceQueue(); }, 1400);
+    }, 400);
+  }
+  function postAnnounced(ids) {
+    fetch(APPS_SCRIPT_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({ action: 'announced', ids: ids })
+    }).catch(function () {});
+  }
+
+  function activeQueue(queue) {
+    return queue
+      .filter(function (q) { return q.status === 'called' || q.status === 'enroute'; })
+      .sort(function (a, b) { return a.ts - b.ts; });
+  }
+
+  function renderBoard(queue) {
+    var active = activeQueue(queue);
+    var left = active.slice(0, 7);
+    var right = active.slice(7);
+    renderCafeCol('leftCards', left, 1);
+    renderCafeCol('rightCards', right, 8);
+  }
+
+  function renderCafeCol(elId, items, startNum) {
+    var el = document.getElementById(elId);
+    if (!items.length) { el.innerHTML = '<div class="empty-hint">—</div>'; return; }
+    el.innerHTML = items.map(function (item, i) {
+      var status = item.status;
+      var flashClass = (status === 'called' && flashingIds[item.id]) ? ' flashing' : '';
+      return '<div class="card ' + status + flashClass + '" data-id="' + item.id + '" data-status="' + status + '">' +
+        '<div class="slot-badge">' + (startNum + i) + '</div>' +
+        '<span>' + escapeHtml(item.full) + '</span></div>';
+    }).join('');
+  }
+
+  document.querySelectorAll('#view-cafeteria .cards').forEach(function (col) {
+    col.addEventListener('click', function (e) {
+      var card = e.target.closest('.card');
+      if (!card) return;
+      var status = card.getAttribute('data-status');
+      var id = card.getAttribute('data-id');
+      if (status === 'called') postAction({ action: 'enroute', id: id });
+    });
+  });
+
+  function postAction(payload) {
+    fetch(APPS_SCRIPT_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify(payload)
+    }).then(function () { poll(); }).catch(function () { setOnline(false); });
+  }
+
+  function handleNewCalls(queue) {
+    var newBatches = {};
+    var newSingles = [];
+    queue.forEach(function (item) {
+      if (item.status !== 'called') return;
+      if (announcedIds.indexOf(item.id) !== -1) return;
+      announcedIds.push(item.id);
+      flashingIds[item.id] = true;
+      setTimeout(function () { delete flashingIds[item.id]; renderBoard(lastQueue); }, FLASH_MS);
+
+      if (item.batchId) {
+        if (!newBatches[item.batchId]) newBatches[item.batchId] = [];
+        newBatches[item.batchId].push(item.id);
+      } else {
+        newSingles.push(item.id);
+      }
+    });
+    var batchKeys = Object.keys(newBatches);
+    if (batchKeys.length || newSingles.length) {
+      localStorage.setItem('byecar_announced', JSON.stringify(announcedIds.slice(-500)));
+    }
+    batchKeys.forEach(function (k) { queueAnnouncement(newBatches[k]); });
+    newSingles.forEach(function (id) { queueAnnouncement([id]); });
+  }
+
+  /* ====================================================================
+     DOOR VIEW — single locked list with 7s local undo before finalizing
+  ==================================================================== */
+  var doorListEl = document.getElementById('doorList');
+  var doorPending = {}; // id -> timeout handle
+  var doorKnownStatuses = {}; // id -> last seen status, for detecting enroute transitions
+
+  function renderDoor(queue) {
+    var active = activeQueue(queue);
+    if (!active.length) { doorListEl.innerHTML = '<div class="hint">No one waiting right now.</div>'; return; }
+    doorListEl.innerHTML = active.map(function (item, i) {
+      var isPending = !!doorPending[item.id];
+      var cls = isPending ? 'pending' : item.status;
+      var tag = isPending ? 'Tap to undo' : (item.status === 'enroute' ? 'En Route' : 'Called');
+      return '<div class="door-card ' + cls + '" data-id="' + item.id + '">' +
+        '<div class="slot-badge">' + (i + 1) + '</div>' +
+        '<div class="info">' + escapeHtml(item.full) + '<span class="tag">' + tag + '</span></div></div>';
+    }).join('');
+  }
+
+  doorListEl.addEventListener('click', function (e) {
+    var card = e.target.closest('.door-card');
+    if (!card) return;
+    var id = card.getAttribute('data-id');
+
+    if (doorPending[id]) {
+      clearTimeout(doorPending[id]);
+      delete doorPending[id];
+      renderDoor(lastQueue);
+      return;
+    }
+
+    doorPending[id] = setTimeout(function () {
+      delete doorPending[id];
+      postDeparted(id);
+    }, DOOR_UNDO_MS);
+    renderDoor(lastQueue);
+  });
+
+  function postDeparted(id) {
+    fetch(APPS_SCRIPT_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({ action: 'departed', id: id })
+    }).then(function () { poll(); }).catch(function () { setOnline(false); });
+  }
+
+  /* ====================================================================
+     SHARED POLLING
+  ==================================================================== */
+  function poll() {
+    fetch(APPS_SCRIPT_URL + '?action=state')
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        setOnline(true);
+        var queue = data.queue || [];
+        if (mode === 'cafeteria') handleNewCalls(queue);
+        if (mode === 'door') {
+          // Chime when a student transitions to En Route (cafeteria just tapped them)
+          queue.forEach(function (item) {
+            var prev = doorKnownStatuses[item.id];
+            if (item.status === 'enroute' && prev && prev !== 'enroute') {
+              playChime();
+            }
+            doorKnownStatuses[item.id] = item.status;
+          });
+        }
+        lastQueue = queue;
+        localStorage.setItem('byecar_lastQueue', JSON.stringify(lastQueue));
+        if (mode === 'cafeteria') renderBoard(lastQueue);
+        if (mode === 'door') renderDoor(lastQueue);
+        if (mode === 'car') renderStrip();
+      })
+      .catch(function () { setOnline(false); });
+  }
+
+  /* ====================================================================
+     RESET
+  ==================================================================== */
+  var resetOverlay = document.getElementById('resetOverlay');
+  document.getElementById('resetBtn').addEventListener('click', function () {
+    resetOverlay.style.display = 'flex';
+  });
+  document.getElementById('resetCancel').addEventListener('click', function () {
+    resetOverlay.style.display = 'none';
+  });
+  document.getElementById('resetConfirm').addEventListener('click', function () {
+    resetOverlay.style.display = 'none';
+    // Clear all local state
+    localStorage.removeItem('byecar_lastQueue');
+    localStorage.removeItem('byecar_recentSent');
+    localStorage.removeItem('byecar_pending');
+    localStorage.removeItem('byecar_announced');
+    recentSent = [];
+    pendingSends = [];
+    announcedIds = [];
+    flashingIds = {};
+    announceQueue = [];
+    announcing = false;
+    doorPending = {};
+    doorKnownStatuses = {};
+    lastQueue = [];
+    // Tell the server to wipe the queue too
+    fetch(APPS_SCRIPT_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({ action: 'reset' })
+    }).then(function () {
+      setOnline(true);
+      renderStrip();
+      renderBoard([]);
+      renderDoor([]);
+      refreshPendingNote();
+      toast('System reset ✓');
+    }).catch(function () {
+      setOnline(false);
+      toast('Reset sent — reconnecting...');
+    });
+  });
 
   /* ====================================================================
      INIT
