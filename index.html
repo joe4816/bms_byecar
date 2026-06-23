@@ -512,8 +512,9 @@
     renderCarBoard();
     toast(students.length > 1 ? 'Sent ' + students.length + ' students' : 'Sent ' + students[0].full);
     searchInput.value = '';
-    renderResults(); // shows hint in overlay — keyboard stays up
-    searchInput.focus(); // keep keyboard open
+    searchOverlay.classList.remove('open');
+    renderResults();
+    setTimeout(function () { searchInput.focus(); }, 50); // board visible, keyboard stays
 
     var payload = {
       action: 'call',
