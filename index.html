@@ -274,15 +274,23 @@
   }
   function playChime() {
     var ctx = getAudioCtx();
-    var now = ctx.currentTime;
-    [0, 0.097].forEach(function(offset) {
-      tone(ctx, 660, now + offset, 0.1);
-      tone(ctx, 880, now + offset + 0.1, 0.1);
-      tone(ctx, 1100, now + offset + 0.2, 0.16);
-    });
+    function scheduleChime() {
+      var now = ctx.currentTime;
+      [0, 0.097].forEach(function (offset) {
+        tone(ctx, 660, now + offset, 0.1);
+        tone(ctx, 880, now + offset + 0.1, 0.1);
+        tone(ctx, 1100, now + offset + 0.2, 0.16);
+      });
+    }
+    if (ctx.state === 'suspended') {
+      ctx.resume().then(scheduleChime);
+    } else {
+      scheduleChime();
+    }
   }
   function speak(text) {
     if (!window.speechSynthesis) return;
+    window.speechSynthesis.cancel(); // clear any stuck iOS queue before speaking
     var u = new SpeechSynthesisUtterance(text);
     u.rate = 0.95;
     window.speechSynthesis.speak(u);
@@ -579,13 +587,18 @@
   function processAnnounceQueue() {
     if (announcing || !announceQueue.length) return;
     announcing = true;
+    var safetyReset = setTimeout(function () { announcing = false; }, 4000); // failsafe
     var ids = announceQueue.shift();
     var isBatch = ids.length > 1;
     playChime();
     setTimeout(function () {
       speak(isBatch ? 'Calling for these students' : 'Calling for next student');
       postAnnounced(ids);
-      setTimeout(function () { announcing = false; processAnnounceQueue(); }, 1400);
+      setTimeout(function () {
+        clearTimeout(safetyReset);
+        announcing = false;
+        processAnnounceQueue();
+      }, 1400);
     }, 400);
   }
   function postAnnounced(ids) {
