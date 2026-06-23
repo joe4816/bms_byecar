@@ -28,7 +28,7 @@
     background: var(--cream); color: var(--text);
     overscroll-behavior: none;
   }
-  body { display: flex; flex-direction: column; height: 100vh; min-height: 0; }
+  body { display: flex; flex-direction: column; height: var(--vvh, 100vh); min-height: 0; }
 
   header {
     background: var(--purple); color: #fff;
@@ -52,28 +52,34 @@
   .view.active { display: flex; }
 
   /* ---------- Car view ---------- */
-  .status-strip { flex: 0 0 auto; padding: 10px 16px 0; display: flex; flex-direction: column; gap: 6px; }
-  .status-row {
-    display: flex; align-items: center; gap: 10px; background: #fff;
-    border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px;
-  }
-  .status-row .num {
-    width: 22px; height: 22px; border-radius: 50%; background: var(--purple);
-    color: #fff; font-size: 12px; font-weight: 800; display: flex; align-items: center; justify-content: center;
-    flex: 0 0 auto;
-  }
-  .status-row .name { flex: 1; font-weight: 600; font-size: 15px; }
-  .status-row .state { font-size: 12px; font-weight: 700; }
-  .status-row .state.sending { color: var(--muted); }
-  .status-row .state.called { color: var(--ok); }
-
-  .search-wrap { padding: 10px 16px; flex: 0 0 auto; display: flex; gap: 8px; }
+  #view-car { position: relative; }
+  .search-wrap { padding: 10px 16px; flex: 0 0 auto; }
   #search {
-    flex: 1; min-width: 0; padding: 14px 16px; font-size: 18px; border-radius: 12px;
+    width: 100%; padding: 14px 16px; font-size: 18px; border-radius: 12px;
     border: 2px solid var(--line); outline: none; background: #fff; color: var(--text);
   }
   #search:focus { border-color: var(--purple-light); }
-  #carMain { flex: 1; min-height: 0; overflow-y: auto; padding: 0 16px 16px; }
+
+  #carBoardWrap { flex: 1; min-height: 0; position: relative; }
+  .car-board { height: 100%; display: flex; gap: 12px; padding: 8px 14px 12px; }
+  .car-board .col { flex: 1; min-height: 0; display: flex; flex-direction: column; background: rgba(255,255,255,0.5); border-radius: 14px; padding: 10px; border: 2px solid rgba(255,255,255,0.6); overflow-y: auto; gap: 8px; }
+  .car-card { border-radius: 11px; padding: 10px 12px; font-size: 15px; font-weight: 700; color: #fff; display: flex; align-items: center; gap: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.12); }
+  .car-card .slot-badge { width: 26px; height: 26px; border-radius: 50%; background: rgba(255,255,255,0.3); display: flex; align-items: center; justify-content: center; font-size: 12px; flex: 0 0 auto; }
+  .car-card .card-info { flex: 1; min-width: 0; }
+  .car-card .card-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .car-card .card-tag { font-size: 10px; opacity: 0.85; font-weight: 600; text-transform: uppercase; letter-spacing: .3px; margin-top: 1px; }
+  .car-card.sending { background: var(--muted); }
+  .car-card.called { background: var(--called); cursor: pointer; }
+  .car-card.called.flashing { animation: pulse 0.9s infinite; }
+  .car-card.enroute { background: var(--enroute); color: #4a3900; cursor: pointer; }
+  .car-card.carpending { background: var(--pending); cursor: pointer; }
+  .car-empty { color: var(--muted-light); text-align: center; font-size: 14px; padding: 12px 0; }
+
+  #searchOverlay {
+    display: none; position: absolute; inset: 0;
+    background: var(--cream); z-index: 10; overflow-y: auto; padding: 6px 16px 16px;
+  }
+  #searchOverlay.open { display: block; }
   .hint { color: var(--muted); font-size: 14px; text-align: center; margin-top: 24px; }
 
   .result-row {
@@ -169,12 +175,17 @@
 
 <!-- ===== CAR VIEW ===== -->
 <div class="view" id="view-car">
-  <div class="status-strip" id="statusStrip"></div>
   <div class="search-wrap">
     <input id="search" type="text" placeholder="Type a name..." autocomplete="off" autocapitalize="words">
   </div>
-  <div id="carMain">
-    <div id="resultsContainer"></div>
+  <div id="carBoardWrap">
+    <div class="car-board">
+      <div class="col" id="carLeftCards"></div>
+      <div class="col" id="carRightCards"></div>
+    </div>
+    <div id="searchOverlay">
+      <div id="resultsContainer"></div>
+    </div>
   </div>
   <div class="batch-bar" id="batchBar">
     <span id="batchCount">0 selected</span>
@@ -289,7 +300,7 @@
     localStorage.setItem('byecar_mode', mode);
     if (mode === 'cafeteria') renderBoard(lastQueue);
     if (mode === 'door') renderDoor(lastQueue);
-    if (mode === 'car') { renderStrip(); searchInput.focus(); }
+    if (mode === 'car') { renderCarBoard(); searchInput.focus(); }
   }
 
   document.getElementById('modeSwitch').addEventListener('click', function (e) {
@@ -313,7 +324,8 @@
   var batchBar = document.getElementById('batchBar');
   var batchCount = document.getElementById('batchCount');
   var pendingNote = document.getElementById('pendingNote');
-  var statusStrip = document.getElementById('statusStrip');
+  var searchOverlay = document.getElementById('searchOverlay');
+  var carPending = {}; // id -> timeout, for car-side 7s undo
 
   function refreshPendingNote() {
     pendingNote.textContent = pendingSends.length ? pendingSends.length + ' waiting to send...' : '';
@@ -324,26 +336,67 @@
   }
   function saveRecentSent() { localStorage.setItem('byecar_recentSent', JSON.stringify(recentSent)); }
 
-  function renderStrip() {
-    // Drop entries whose real ID is no longer in the server queue (departed/cleared)
-    recentSent = recentSent.filter(function (item) {
-      if (item.id.indexOf('tmp_') === 0) return true; // still sending, keep
-      return !!lastQueue.find(function (q) { return q.id === item.id; });
+  function renderCarBoard() {
+    // Sending cards: recentSent items still waiting for server confirmation (temp IDs)
+    recentSent = recentSent.filter(function (r) {
+      if (r.id.indexOf('tmp_') === 0) return true;
+      return !!lastQueue.find(function (q) { return q.id === r.id; });
     });
     saveRecentSent();
-    if (!recentSent.length) { statusStrip.innerHTML = ''; return; }
-    var n = recentSent.length;
-    statusStrip.innerHTML = recentSent.map(function (item, i) {
-      var label = n - i;
-      var live = lastQueue.find(function (q) { return q.id === item.id; });
-      var announced = live && live.announcedAt;
-      var stateHtml = announced
-        ? '<span class="state called">Called ' + formatTime(live.announcedAt) + '</span>'
-        : '<span class="state sending">Sending...</span>';
-      return '<div class="status-row"><div class="num">' + label + '</div>' +
-        '<div class="name">' + escapeHtml(item.full) + '</div>' + stateHtml + '</div>';
+
+    var sending = recentSent
+      .filter(function (r) { return r.id.indexOf('tmp_') === 0; })
+      .map(function (r) { return { id: r.id, full: r.full, status: 'sending', ts: r.sentAt || 0 }; });
+
+    var active = activeQueue(lastQueue);
+    var all = sending.concat(active);
+    renderCarCol('carLeftCards', all.slice(0, 7), 1);
+    renderCarCol('carRightCards', all.slice(7), 8);
+  }
+
+  function renderCarCol(elId, items, startNum) {
+    var el = document.getElementById(elId);
+    if (!items.length) { el.innerHTML = '<div class="car-empty">—</div>'; return; }
+    el.innerHTML = items.map(function (item, i) {
+      var isPending = !!carPending[item.id];
+      var cls = isPending ? 'carpending' : item.status;
+      var tag = isPending ? 'Tap to undo' :
+                item.status === 'enroute' ? 'En Route — tap to clear' :
+                item.status === 'called' ? 'Called' : 'Sending...';
+      var flashClass = (item.status === 'called' && flashingIds[item.id]) ? ' flashing' : '';
+      return '<div class="car-card ' + cls + flashClass + '" data-id="' + escapeHtml(item.id) + '" data-status="' + item.status + '">' +
+        '<div class="slot-badge">' + (startNum + i) + '</div>' +
+        '<div class="card-info"><div class="card-name">' + escapeHtml(item.full) + '</div>' +
+        '<div class="card-tag">' + tag + '</div></div></div>';
     }).join('');
   }
+
+  // Car board tap: called→enroute, enroute→7s pending→departed
+  ['carLeftCards','carRightCards'].forEach(function(id) {
+    document.getElementById(id).addEventListener('click', function (e) {
+      var card = e.target.closest('.car-card');
+      if (!card) return;
+      var cid = card.getAttribute('data-id');
+      var status = card.getAttribute('data-status');
+      if (cid.indexOf('tmp_') === 0) return; // still sending, ignore
+
+      if (carPending[cid]) {
+        clearTimeout(carPending[cid]);
+        delete carPending[cid];
+        renderCarBoard();
+        return;
+      }
+      if (status === 'called') {
+        postAction({ action: 'enroute', id: cid });
+      } else if (status === 'enroute') {
+        carPending[cid] = setTimeout(function () {
+          delete carPending[cid];
+          postDeparted(cid);
+        }, DOOR_UNDO_MS);
+        renderCarBoard();
+      }
+    });
+  });
 
   function genTempId() { return 'tmp_' + Math.random().toString(36).slice(2) + Date.now(); }
 
@@ -436,7 +489,11 @@
     renderResults();
   });
 
-  searchInput.addEventListener('input', renderResults);
+  searchInput.addEventListener('input', function () {
+    var hasText = searchInput.value.trim().length > 0;
+    searchOverlay.classList.toggle('open', hasText);
+    renderResults();
+  });
 
   /* ---------- Sending ---------- */
   function sendCall(students) {
@@ -444,11 +501,12 @@
     students.forEach(function (s, i) {
       recentSent.push({ id: clientIds[i], full: s.full, sentAt: Date.now() });
     });
-    recentSent = recentSent.slice(-3);
+    recentSent = recentSent.slice(-14);
     saveRecentSent();
-    renderStrip();
+    renderCarBoard();
     toast(students.length > 1 ? 'Sent ' + students.length + ' students' : 'Sent ' + students[0].full);
     searchInput.value = '';
+    searchOverlay.classList.remove('open');
     renderResults();
 
     var payload = {
@@ -463,8 +521,10 @@
 
   function queueOrSend(payload) { pendingSends.push(payload); savePending(); flushPending(); }
 
+  var flushing = false;
   function flushPending() {
-    if (!pendingSends.length) return;
+    if (flushing || !pendingSends.length) return;
+    flushing = true;
     var next = pendingSends[0];
     fetch(APPS_SCRIPT_URL, {
       method: 'POST',
@@ -479,14 +539,15 @@
             if (match) match.id = entry.id;
           });
           saveRecentSent();
-          renderStrip();
+          renderCarBoard();
         }
         pendingSends.shift();
         savePending();
         setOnline(true);
+        flushing = false;
         if (pendingSends.length) flushPending();
       })
-      .catch(function () { setOnline(false); });
+      .catch(function () { setOnline(false); flushing = false; });
   }
 
   /* ====================================================================
@@ -662,7 +723,7 @@
         localStorage.setItem('byecar_lastQueue', JSON.stringify(lastQueue));
         if (mode === 'cafeteria') renderBoard(lastQueue);
         if (mode === 'door') renderDoor(lastQueue);
-        if (mode === 'car') renderStrip();
+        if (mode === 'car') renderCarBoard();
       })
       .catch(function () { setOnline(false); });
   }
@@ -692,6 +753,7 @@
     announcing = false;
     doorPending = {};
     doorKnownStatuses = {};
+    carPending = {};
     lastQueue = [];
     // Tell the server to wipe the queue too
     fetch(APPS_SCRIPT_URL, {
@@ -700,7 +762,7 @@
       body: JSON.stringify({ action: 'reset' })
     }).then(function () {
       setOnline(true);
-      renderStrip();
+      renderCarBoard();
       renderBoard([]);
       renderDoor([]);
       refreshPendingNote();
@@ -714,6 +776,18 @@
   /* ====================================================================
      INIT
   ==================================================================== */
+  // Keep body height in sync with the visible area so the keyboard doesn't
+  // bury the board. visualViewport.height shrinks when the iOS keyboard appears;
+  // window.innerHeight does not.
+  function syncVVH() {
+    var h = window.visualViewport ? window.visualViewport.height : window.innerHeight;
+    document.documentElement.style.setProperty('--vvh', h + 'px');
+  }
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener('resize', syncVVH);
+    window.visualViewport.addEventListener('scroll', syncVVH);
+  }
+  syncVVH();
   applyMode();
   renderResults();
   refreshPendingNote();
