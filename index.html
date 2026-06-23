@@ -224,7 +224,7 @@
 
 <script>
   var APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbwv5EzBzqiEVIs3lkphhu42KdEab6YSY8Ff1NOHcBpQzM1i5gvd6RUV-k2z6FvAmoOe/exec';
-  var POLL_MS = 3000;
+  var POLL_MS = 2000;
   var FLASH_MS = 8000;
   var DOOR_UNDO_MS = 7000;
 
@@ -381,16 +381,22 @@
       if (cid.indexOf('tmp_') === 0) return; // still sending, ignore
 
       if (carPending[cid]) {
+        if (carPending[cid] === 'departing') return; // already committed
         clearTimeout(carPending[cid]);
         delete carPending[cid];
         renderCarBoard();
         return;
       }
       if (status === 'called') {
+        // Optimistic update
+        var item = lastQueue.find(function(q) { return q.id === cid; });
+        if (item) item.status = 'enroute';
+        renderCarBoard();
         postAction({ action: 'enroute', id: cid });
       } else if (status === 'enroute') {
         carPending[cid] = setTimeout(function () {
-          delete carPending[cid];
+          carPending[cid] = 'departing';
+          renderCarBoard();
           postDeparted(cid);
         }, DOOR_UNDO_MS);
         renderCarBoard();
@@ -506,8 +512,8 @@
     renderCarBoard();
     toast(students.length > 1 ? 'Sent ' + students.length + ' students' : 'Sent ' + students[0].full);
     searchInput.value = '';
-    searchOverlay.classList.remove('open');
-    renderResults();
+    renderResults(); // shows hint in overlay — keyboard stays up
+    searchInput.focus(); // keep keyboard open
 
     var payload = {
       action: 'call',
@@ -620,11 +626,32 @@
   });
 
   function postAction(payload) {
+    // Optimistic update — mutate lastQueue locally so UI feels instant
+    if (payload.action === 'enroute') {
+      lastQueue.forEach(function (q) {
+        if (q.id === payload.id) q.status = 'enroute';
+        // move siblings too if batched
+        if (payload.id && q.batchId) {
+          var target = lastQueue.find(function (x) { return x.id === payload.id; });
+          if (target && target.batchId && q.batchId === target.batchId) q.status = 'enroute';
+        }
+      });
+      if (mode === 'cafeteria') renderBoard(lastQueue);
+      if (mode === 'car') renderCarBoard();
+    }
     fetch(APPS_SCRIPT_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
       body: JSON.stringify(payload)
-    }).then(function () { poll(); }).catch(function () { setOnline(false); });
+    }).then(function () { poll(); setOnline(true); }).catch(function () { setOnline(false); });
+  }
+
+  function postDeparted(id) {
+    return fetch(APPS_SCRIPT_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({ action: 'departed', id: id })
+    }).then(function () { poll(); setOnline(true); }).catch(function () { setOnline(false); });
   }
 
   function handleNewCalls(queue) {
@@ -678,6 +705,7 @@
     var id = card.getAttribute('data-id');
 
     if (doorPending[id]) {
+      if (doorPending[id] === 'departing') return; // already committed, can't undo
       clearTimeout(doorPending[id]);
       delete doorPending[id];
       renderDoor(lastQueue);
@@ -685,19 +713,12 @@
     }
 
     doorPending[id] = setTimeout(function () {
-      delete doorPending[id];
+      doorPending[id] = 'departing';
+      renderDoor(lastQueue);
       postDeparted(id);
     }, DOOR_UNDO_MS);
     renderDoor(lastQueue);
   });
-
-  function postDeparted(id) {
-    fetch(APPS_SCRIPT_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify({ action: 'departed', id: id })
-    }).then(function () { poll(); }).catch(function () { setOnline(false); });
-  }
 
   /* ====================================================================
      SHARED POLLING
