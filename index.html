@@ -501,6 +501,13 @@
     renderResults();
   });
 
+  // Prevent the input from losing focus when the user taps inside the overlay.
+  // mousedown fires before blur, so preventDefault() here stops iOS from
+  // dismissing the keyboard when Send is tapped.
+  searchOverlay.addEventListener('mousedown', function (e) {
+    e.preventDefault();
+  });
+
   /* ---------- Sending ---------- */
   function sendCall(students) {
     var clientIds = students.map(function () { return genTempId(); });
@@ -514,7 +521,6 @@
     searchInput.value = '';
     searchOverlay.classList.remove('open');
     renderResults();
-    setTimeout(function () { searchInput.focus(); }, 50); // board visible, keyboard stays
 
     var payload = {
       action: 'call',
